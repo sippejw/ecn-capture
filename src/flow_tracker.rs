@@ -183,8 +183,8 @@ impl FlowTracker {
                 for (_k, ecn) in ecn_cache {
                     let updated_rows = thread_db_conn.execute(&insert_measurement, &[&(ecn.start_time),
                         &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.client_cc), &(ecn.server_cc),
-                        &(ecn.client_ece as i8), &(ecn.client_cwr as i8), &(ecn.server_ece as i8), &(ecn.client_fin as i8),
-                        &(ecn.client_rst as i8), &(ecn.server_fin as i8), &(ecn.server_rst as i8), &(ecn.stale as i8), &(ecn.client_00),
+                        &(ecn.client_ece as i16), &(ecn.client_cwr as i16), &(ecn.server_ece as i16), &(ecn.client_fin as i16),
+                        &(ecn.client_rst as i16), &(ecn.server_fin as i16), &(ecn.server_rst as i16), &(ecn.stale as i16), &(ecn.client_00),
                         &(ecn.client_01), &(ecn.client_10), &(ecn.client_11), &(ecn.server_00), &(ecn.server_01),
                         &(ecn.server_10), &(ecn.server_11)]);
                     if updated_rows.is_err() {

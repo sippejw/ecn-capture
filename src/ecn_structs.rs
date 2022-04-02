@@ -25,15 +25,15 @@ pub struct ECN {
     // Closed because connections went stale
     pub stale: u8,
     // Packets from client measurements
-    pub client_00: i64,
-    pub client_01: i64,
-    pub client_10: i64,
-    pub client_11: i64,
+    pub client_00: i32,
+    pub client_01: i32,
+    pub client_10: i32,
+    pub client_11: i32,
     // Packets from server measurements
-    pub server_00: i64,
-    pub server_01: i64,
-    pub server_10: i64,
-    pub server_11: i64,
+    pub server_00: i32,
+    pub server_01: i32,
+    pub server_10: i32,
+    pub server_11: i32,
 }
 
 impl ECN {

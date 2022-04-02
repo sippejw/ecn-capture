@@ -17,6 +17,7 @@ pub struct RustGlobalsStruct
     ft: *mut FlowTracker,
 }
 
+#[no_mangle]
 pub extern "C" fn rust_init(core_id: i8, cores_total: i32, tcp_dsn_ptr: *const c_char, gre_offset: usize) -> RustGlobalsStruct {
     env_logger::init();
 
@@ -32,6 +33,7 @@ pub extern "C" fn rust_init(core_id: i8, cores_total: i32, tcp_dsn_ptr: *const c
     RustGlobalsStruct { ft: unsafe { transmute(Box::new(ft)) } }
 }
 
+#[no_mangle]
 pub extern "C" fn rust_process_packet(globals_ptr: *mut RustGlobalsStruct, raw_ethframe: *mut c_void, frame_len: size_t) {
     let globals = unsafe { &mut *globals_ptr };
     let ft = unsafe { &mut *globals.ft };
@@ -56,6 +58,7 @@ pub extern "C" fn rust_process_packet(globals_ptr: *mut RustGlobalsStruct, raw_e
     };
 }
 
+#[no_mangle]
 pub extern "C" fn rust_print_avg_stats(globals_ptr: *mut RustGlobalsStruct, current: i64, total: i64) {
     let globals = unsafe { &mut *globals_ptr };
     let ft = unsafe { &mut *globals.ft };
@@ -63,6 +66,7 @@ pub extern "C" fn rust_print_avg_stats(globals_ptr: *mut RustGlobalsStruct, curr
     ft.stats.print_stats(current, total);
 }
 
+#[no_mangle]
 pub extern "C" fn rust_periodic_cleanup(globals_ptr: *mut RustGlobalsStruct) {
     let globals = unsafe { &mut *globals_ptr };
     let ft = unsafe { &mut *globals.ft };

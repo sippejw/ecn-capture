@@ -19,7 +19,7 @@
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
-#include "rust-src/rust_ffi.h"
+#include "rust_ffi.h"
 
 // Once we are receiving filtered, 443-only traffic, we might need a lower
 // PKT_BURST_SIZE! Although, given all of the non-443 junk that gets quickly
@@ -245,7 +245,7 @@ void parse_cmd_args(int argc, char* argv[], struct cmd_options* options)
     int skip_core = -1; // If >0, skip this core when incrementing
 
     char c;
-    while ((c = getopt(argc,argv,"n:m:c:p:f:o:l:s:g:h:")) != -1)
+    while ((c = getopt(argc,argv,"m:n:t:c:o:l:s:g:")) != -1)
     {
         switch (c)
         {
@@ -256,7 +256,7 @@ void parse_cmd_args(int argc, char* argv[], struct cmd_options* options)
                 cpu_procs_i32 = atoi(optarg);
                 break;
             case 't':
-                options->tcp = optarg;
+                options->tcp_db_source_name = optarg;
                 break;
             case 'c':
                 options->cluster_id = atoi(optarg);
