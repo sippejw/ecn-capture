@@ -1,0 +1,3 @@
+[submodule "PF_RING"]
+	path = PF_RING
+	url = https://github.com/sippejw/PF_RING
