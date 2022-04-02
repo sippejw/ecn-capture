@@ -42,10 +42,18 @@ impl ECN {
         let mut server_cc: Option<String> = None;
         let mut client_cc: Option<String> = None;
         if let Some(country) = src_country {
-            client_cc = Some(country.country.unwrap().iso_code.unwrap().to_string());
+            if let Some(valid_country) = country.country {
+                if let Some(valid_iso) = valid_country.iso_code {
+                    client_cc = Some(valid_iso.to_string());
+                }
+            }
         }
         if let Some(country) = dst_country {
-            server_cc = Some(country.country.unwrap().iso_code.unwrap().to_string())
+            if let Some(valid_country) = country.country {
+                if let Some(valid_iso) = valid_country.iso_code {
+                    server_cc = Some(valid_iso.to_string());
+                }
+            }
         }
         ECN {
             start_time: curr_time,
