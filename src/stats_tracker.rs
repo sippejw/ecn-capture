@@ -9,6 +9,7 @@ pub struct StatsTracker {
     pub tcp_packets_seen: u64,
     pub bytes_processed: u64,
     pub bad_checksums: u64,
+    pub connections_seen: u64,
     pub connections_started: u64,
     pub connections_closed: u64,
 }
@@ -23,6 +24,7 @@ impl StatsTracker {
             tcp_packets_seen: 0,
             bytes_processed: 0,
             bad_checksums: 0,
+            connections_seen: 0,
             connections_started: 0,
             connections_closed: 0,
         }
@@ -48,12 +50,14 @@ impl StatsTracker {
         }
 
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
-        info!("[general stats] drops: {} {} all packets: {} tcp packets: {} (bad tcp checksums: {}); Gbps: {:.4}",
+        info!("[general stats] drops: {} {} all packets: {} tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; Gbps: {:.4}",
                 curr_drops,
                 total_drops,
                 self.total_packets,
                 self.tcp_packets_seen,
                 self.bad_checksums,
+                self.connections_started,
+                self.connections_seen,
                 self.bytes_processed as f64 / (BYTES_TO_GBPS * diff_float),
         );
 
@@ -61,6 +65,8 @@ impl StatsTracker {
         self.total_packets = 0;
         self.tcp_packets_seen = 0;
         self.bad_checksums = 0;
+        self.connections_started = 0;
+        self.connections_seen = 0;
 
         self.last_print = curr_time;
     }

@@ -9,11 +9,13 @@ use pnet::packet::{Packet};
 use pnet::packet::ipv4::{Ipv4Packet};
 use pnet::packet::ip::{IpNextHeaderProtocols};
 use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum};
+use rand::prelude::ThreadRng;
 use std::net::{Ipv4Addr, IpAddr};
 use log::{error, info};
 use maxminddb::Reader;
 use std::{thread};
 use postgres::{Client, NoTls};
+use rand::Rng;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
@@ -28,7 +30,7 @@ pub struct FlowTracker {
     country: Reader<Vec<u8>>,
     tracked_flows: HashSet<Flow>,
     stale_drops: VecDeque<TimedFlow>,
-
+    rand: ThreadRng,
     pub gre_offset: usize,
 }
 
@@ -42,6 +44,7 @@ impl FlowTracker {
             country:  Reader::open_readfile("data/GeoLite2-Country.mmdb").unwrap(),
             tracked_flows: HashSet::new(),
             stale_drops: VecDeque::with_capacity(65536),
+            rand: rand::thread_rng(),
             gre_offset: gre_offset,
         };
 
@@ -84,12 +87,15 @@ impl FlowTracker {
         let flow = Flow::new(&source, &destination, &tcp_pkt);
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
-            self.stats.connections_started += 1;
-            self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
-            let src_cc = self.country.lookup(IpAddr::V4(source)).unwrap_or(None);
-            let dst_cc = self.country.lookup(IpAddr::V4(destination)).unwrap_or(None);
-            let measurement = ECN::syn(tcp_pkt.get_destination(), u8array_to_u32_be(source.octets()), u8array_to_u32_be(destination.octets()), src_cc, dst_cc, tcp_flags);
-            self.cache.add_measurement(&flow, measurement);
+            self.stats.connections_seen += 1;
+            if self.rand.gen_range(0..10) > 4 {
+                self.stats.connections_started += 1;
+                self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
+                let src_cc = self.country.lookup(IpAddr::V4(source)).unwrap_or(None);
+                let dst_cc = self.country.lookup(IpAddr::V4(destination)).unwrap_or(None);
+                let measurement = ECN::syn(tcp_pkt.get_destination(), u8array_to_u32_be(source.octets()), u8array_to_u32_be(destination.octets()), src_cc, dst_cc, tcp_flags);
+                self.cache.add_measurement(&flow, measurement);
+            }
             return
         }
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) != 0 {
