@@ -88,7 +88,7 @@ impl FlowTracker {
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.stats.connections_seen += 1;
-            if self.rand.gen_range(0..10) > 4 {
+            if self.rand.gen_range(0..10) > -1 {
                 self.stats.connections_started += 1;
                 self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
                 let src_cc = self.country.lookup(IpAddr::V4(source)).unwrap_or(None);
