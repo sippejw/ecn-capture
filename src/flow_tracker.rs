@@ -5,12 +5,13 @@ use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::collections::{HashSet, VecDeque};
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
+use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::{Packet};
 use pnet::packet::ipv4::{Ipv4Packet};
 use pnet::packet::ip::{IpNextHeaderProtocols};
-use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum};
+use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
 use rand::prelude::ThreadRng;
-use std::net::{Ipv4Addr, IpAddr};
+use std::net::{IpAddr};
 use log::{error, info};
 use maxminddb::Reader;
 use std::{thread};
@@ -19,7 +20,7 @@ use rand::Rng;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
-use crate::common::{TimedFlow, Flow, u8array_to_u32_be};
+use crate::common::{TimedFlow, Flow};
 use crate::ecn_structs::ECN;
 
 pub struct FlowTracker {
@@ -56,6 +57,7 @@ impl FlowTracker {
 
     pub fn handle_ipv4_packet(&mut self, eth_pkt: &EthernetPacket) {
         self.stats.total_packets += 1;
+        self.stats.ipv4_packets += 1;
         self.stats.bytes_processed += eth_pkt.packet().len() as u64;
         let ipv4_pkt = match eth_pkt.get_ethertype() {
             EtherTypes::Vlan => Ipv4Packet::new(&eth_pkt.payload()[4..]),
@@ -67,8 +69,8 @@ impl FlowTracker {
                     if let Some(tcp_pkt) = TcpPacket::new(&ipv4_pkt.payload()) {
                         if ipv4_checksum(&tcp_pkt, &ipv4_pkt.get_source(), &ipv4_pkt.get_destination()) == tcp_pkt.get_checksum() {
                             self.handle_tcp_packet(
-                                ipv4_pkt.get_source(),
-                                ipv4_pkt.get_destination(),
+                                IpAddr::V4(ipv4_pkt.get_source()),
+                                IpAddr::V4(ipv4_pkt.get_destination()),
                                 &tcp_pkt,
                                 ipv4_pkt.get_ecn(),
                             )
@@ -82,7 +84,37 @@ impl FlowTracker {
         }
     }
 
-    pub fn handle_tcp_packet(&mut self, source: Ipv4Addr, destination: Ipv4Addr, tcp_pkt: &TcpPacket, ecn: u8) {
+    pub fn handle_ipv6_packet(&mut self, eth_pkt: &EthernetPacket) {
+        self.stats.total_packets += 1;
+        self.stats.ipv6_packets += 1;
+        self.stats.bytes_processed += eth_pkt.packet().len() as u64;
+        let ipv6_pkt = match eth_pkt.get_ethertype() {
+             EtherTypes::Vlan => Ipv6Packet::new(&eth_pkt.payload()[4..]),
+             _ => Ipv6Packet::new(eth_pkt.payload()),
+        };
+        if let Some(ipv6_pkt) = ipv6_pkt {
+            match ipv6_pkt.get_next_header() {
+                IpNextHeaderProtocols::Tcp => {
+                    if let Some(tcp_pkt) = TcpPacket::new(ipv6_pkt.payload()) {
+                        if ipv6_checksum(&tcp_pkt, &ipv6_pkt.get_source(), &ipv6_pkt.get_destination()) ==
+                            tcp_pkt.get_checksum() {
+                            self.handle_tcp_packet(
+                                IpAddr::V6(ipv6_pkt.get_source()),
+                                IpAddr::V6(ipv6_pkt.get_destination()),
+                                &tcp_pkt,
+                                ipv6_pkt.get_traffic_class() & 0b0000011,
+                            )
+                        } else {
+                            self.stats.bad_checksums += 1;
+                        }
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+
+    pub fn handle_tcp_packet(&mut self, source: IpAddr, destination: IpAddr, tcp_pkt: &TcpPacket, ecn: u8) {
         self.stats.tcp_packets_seen += 1;
         let flow = Flow::new(&source, &destination, &tcp_pkt);
         let tcp_flags = tcp_pkt.get_flags();
@@ -91,9 +123,9 @@ impl FlowTracker {
             if self.rand.gen_range(0..10) > -1 {
                 self.stats.connections_started += 1;
                 self.begin_tracking_flow(&flow, tcp_pkt.packet().to_vec());
-                let src_cc = self.country.lookup(IpAddr::V4(source)).unwrap_or(None);
-                let dst_cc = self.country.lookup(IpAddr::V4(destination)).unwrap_or(None);
-                let measurement = ECN::syn(tcp_pkt.get_destination(), u8array_to_u32_be(source.octets()), u8array_to_u32_be(destination.octets()), src_cc, dst_cc, tcp_flags);
+                let src_cc = self.country.lookup(source).unwrap_or(None);
+                let dst_cc = self.country.lookup(destination).unwrap_or(None);
+                let measurement = ECN::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
                 self.cache.add_measurement(&flow, measurement);
             }
             return
@@ -111,12 +143,12 @@ impl FlowTracker {
             if self.tracked_flows.contains(&flow) {
                 let conn = self.cache.measurements_new.get_mut(&flow);
                 if let Some(ecn) = conn{
-                    ecn.close(u8array_to_u32_be(source.octets()), tcp_flags);
+                    ecn.close(source, tcp_flags);
                 }
             } else if self.tracked_flows.contains(&flow.reversed_clone()) {
                 let conn = self.cache.measurements_new.get_mut(&flow.reversed_clone());
                 if let Some(ecn) = conn {
-                    ecn.close(u8array_to_u32_be(source.octets()), tcp_flags);
+                    ecn.close(source, tcp_flags);
                 }
             }
             self.tracked_flows.remove(&flow);
@@ -129,12 +161,12 @@ impl FlowTracker {
         if self.tracked_flows.contains(&flow) {
             let conn = self.cache.measurements_new.get_mut(&flow);
             if let Some(measurement) = conn{
-                measurement.measure(u8array_to_u32_be(source.octets()), ecn);
+                measurement.measure(source, ecn);
             } 
         } else if self.tracked_flows.contains(&flow.reversed_clone()) {
             let conn = self.cache.measurements_new.get_mut(&flow.reversed_clone());
             if let Some(measurement) = conn {
-                measurement.measure(u8array_to_u32_be(source.octets()), ecn);
+                measurement.measure(source, ecn);
             }
         }
         // once in a while -- flush everything
@@ -144,7 +176,7 @@ impl FlowTracker {
         }
     }
 
-    fn flush_to_db(&mut self) {
+    pub fn flush_to_db(&mut self) {
         let ecn_cache = self.cache.flush_measurements();
 
         if self.tcp_dsn != None {
@@ -159,6 +191,7 @@ impl FlowTracker {
                         start_time,
                         last_updated,                    
                         server_port,
+                        is_ipv4,
                         client_cc,
                         server_cc,
                         client_ece,
@@ -177,7 +210,7 @@ impl FlowTracker {
                         server_01,
                         server_10,
                         server_11)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21);"
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22);"
                 )
                 {
                     Ok(stmt) => stmt,
@@ -188,7 +221,7 @@ impl FlowTracker {
                 };
                 for (_k, ecn) in ecn_cache {
                     let updated_rows = thread_db_conn.execute(&insert_measurement, &[&(ecn.start_time),
-                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.client_cc), &(ecn.server_cc),
+                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.is_ipv4 as i16), &(ecn.client_cc), &(ecn.server_cc),
                         &(ecn.client_ece as i16), &(ecn.client_cwr as i16), &(ecn.server_ece as i16), &(ecn.client_fin as i16),
                         &(ecn.client_rst as i16), &(ecn.server_fin as i16), &(ecn.server_rst as i16), &(ecn.stale as i16), &(ecn.client_00),
                         &(ecn.client_01), &(ecn.client_10), &(ecn.client_11), &(ecn.server_00), &(ecn.server_01),

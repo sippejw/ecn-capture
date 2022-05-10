@@ -103,7 +103,8 @@ fn run_from_pcap(pcap_filename: &str, tcp_dsn: Option<String>, gre_offset: usize
                     Some(eth_pkt) => {
                         match eth_pkt.get_ethertype() {
                             EtherTypes::Ipv4 => ft.handle_ipv4_packet(&eth_pkt),
-                            _ => warn!("Could not parse packet"),
+                            EtherTypes::Ipv6 => ft.handle_ipv6_packet(&eth_pkt),
+                            _ => warn!("Could not parse packet (EtherType: {})", eth_pkt.get_ethertype()),
                         }
                     }
                     None => {
@@ -111,6 +112,7 @@ fn run_from_pcap(pcap_filename: &str, tcp_dsn: Option<String>, gre_offset: usize
                     }
                 }
             }
+            ft.flush_to_db();
         }
         Err(e) => {
             error!("PCAP parse error with file '{}'.", pcap_filename);
@@ -160,7 +162,7 @@ fn run_from_interface(interface: &NetworkInterface, tcp_dsn: Option<String>, gre
                 }
             }
             Err(e) => {
-                error!("An error occured while reading: {}", e);
+                error!("An error occured while reading: {:?}", e);
             }
         }
     }
