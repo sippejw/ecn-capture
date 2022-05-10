@@ -51,6 +51,7 @@ pub extern "C" fn rust_process_packet(globals_ptr: *mut RustGlobalsStruct, raw_e
                     }
                 }
                 EtherTypes::Ipv4 => ft.handle_ipv4_packet(&pkt),
+                EtherTypes::Ipv6 => ft.handle_ipv6_packet(&pkt),
                 _ => return,
             }
         }

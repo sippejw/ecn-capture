@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::{IpAddr};
 use std::hash::{Hash, Hasher};
 use std::time::{Instant};
 
@@ -6,14 +6,14 @@ use pnet::packet::tcp::TcpPacket;
 
 #[derive(Copy, Clone)]
 pub struct Flow {
-    pub src_ip: Ipv4Addr,
-    pub dst_ip: Ipv4Addr,
+    pub src_ip: IpAddr,
+    pub dst_ip: IpAddr,
     pub src_port: u16,
     pub dst_port: u16,
 }
 
 impl Flow {
-    pub fn new(src_ip: &Ipv4Addr, dst_ip: &Ipv4Addr, tcp_pkt: &TcpPacket) -> Flow {
+    pub fn new(src_ip: &IpAddr, dst_ip: &IpAddr, tcp_pkt: &TcpPacket) -> Flow {
         Flow {
             src_ip: *src_ip,
             dst_ip: *dst_ip,
@@ -52,8 +52,4 @@ impl Hash for Flow {
 pub struct TimedFlow {
     pub event_time: Instant,
     pub flow: Flow,
-}
-
-pub fn u8array_to_u32_be(oct: [u8; 4]) -> u32 {
-    (oct[0] as u32) << 24 | (oct[1] as u32) << 16 | (oct[2] as u32) << 8 | (oct[3] as u32)
 }

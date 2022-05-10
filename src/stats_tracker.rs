@@ -5,6 +5,8 @@ use log::{warn, info};
 pub struct StatsTracker {
     pub last_print: time::Tm,
     pub total_packets: u64,
+    pub ipv4_packets: u64,
+    pub ipv6_packets: u64,
     pub packets_logged: u64,
     pub tcp_packets_seen: u64,
     pub bytes_processed: u64,
@@ -20,6 +22,8 @@ impl StatsTracker {
             last_print: time::now(),
 
             total_packets: 0,
+            ipv4_packets: 0,
+            ipv6_packets: 0,
             packets_logged: 0,
             tcp_packets_seen: 0,
             bytes_processed: 0,
@@ -50,10 +54,12 @@ impl StatsTracker {
         }
 
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
-        info!("[general stats] drops: {} {} all packets: {} tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; Gbps: {:.4}",
+        info!("[general stats] drops: {} {} all packets: {} [ipv4: {}, ipv6: {}] tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; Gbps: {:.4}",
                 curr_drops,
                 total_drops,
                 self.total_packets,
+                self.ipv4_packets,
+                self.ipv6_packets,
                 self.tcp_packets_seen,
                 self.bad_checksums,
                 self.connections_started,
@@ -63,6 +69,8 @@ impl StatsTracker {
 
         self.bytes_processed = 0;
         self.total_packets = 0;
+        self.ipv4_packets = 0;
+        self.ipv6_packets = 0;
         self.tcp_packets_seen = 0;
         self.bad_checksums = 0;
         self.connections_started = 0;

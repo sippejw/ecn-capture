@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use pnet::packet::tcp::{TcpFlags};
 use maxminddb::geoip2::{Country};
 
@@ -6,8 +8,9 @@ pub struct ECN {
     pub start_time: i64,
     pub last_updated: i64,
 
-    server_ip: u32,
-    client_ip: u32,
+    server_ip: IpAddr,
+    client_ip: IpAddr,
+    pub is_ipv4: u8,
 
     pub server_port: u16,
     // IP country codes for anon
@@ -37,7 +40,7 @@ pub struct ECN {
 }
 
 impl ECN {
-    pub fn syn(dst_port: u16, src_ip: u32, dst_ip: u32, src_country: Option<Country>, dst_country: Option<Country>, tcp_flags: u16) -> ECN {
+    pub fn syn(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>, tcp_flags: u16) -> ECN {
         let curr_time = time::now().to_timespec().sec;
         let mut server_cc: Option<String> = None;
         let mut client_cc: Option<String> = None;
@@ -61,6 +64,7 @@ impl ECN {
             server_port: dst_port,
             server_ip: dst_ip,
             client_ip: src_ip,
+            is_ipv4: src_ip.is_ipv4() as u8,
             server_cc: server_cc,
             client_cc: client_cc,
             client_ece: ((tcp_flags & TcpFlags::ECE) >> 6) as u8,
@@ -87,7 +91,7 @@ impl ECN {
         self.last_updated = time::now().to_timespec().sec;
     }
 
-    pub fn close(&mut self, src_ip: u32, tcp_flags: u16) {
+    pub fn close(&mut self, src_ip: IpAddr, tcp_flags: u16) {
         if src_ip == self.client_ip {
             self.client_fin = ((tcp_flags & TcpFlags::FIN) >> 0) as u8;
             self.client_rst = ((tcp_flags & TcpFlags::RST) >> 2) as u8;
@@ -97,7 +101,7 @@ impl ECN {
         }
     }
 
-    pub fn measure(&mut self, src_ip: u32, ecn: u8) {
+    pub fn measure(&mut self, src_ip: IpAddr, ecn: u8) {
         match ecn {
             0b00 => {
                 if src_ip == self.client_ip {
