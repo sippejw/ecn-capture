@@ -133,18 +133,17 @@ impl FlowTracker {
         self.stats.udp_packets_seen += 1;
         let flow = Flow::new_udp(&source, &destination, &udp_pkt);
         if self.tracked_udp_flows.contains(&flow) {
-            let conn = self.cache.tcp_measurements_new.get_mut(&flow);
+            let conn = self.cache.udp_measurements_new.get_mut(&flow);
             if let Some(measurement) = conn{
                 measurement.measure(source, ecn);
             }
         } else if self.tracked_udp_flows.contains(&flow.reversed_clone()) {
-            let conn = self.cache.tcp_measurements_new.get_mut(&flow.reversed_clone());
+            let conn = self.cache.udp_measurements_new.get_mut(&flow.reversed_clone());
             if let Some(measurement) = conn {
                 measurement.measure(source, ecn);
             }
         } else {
             self.begin_tracking_udp_flow(&flow);
-
             let src_cc = self.country.lookup(source).unwrap_or(None);
             let dst_cc = self.country.lookup(destination).unwrap_or(None);
             let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination, src_cc, dst_cc);

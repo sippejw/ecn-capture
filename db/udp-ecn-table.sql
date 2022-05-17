@@ -1,16 +1,8 @@
-CREATE TABLE public.ecn_measurements
+CREATE TABLE public.udp_ecn_measurements
 (
     start_time bigint,
     last_updated bigint,
     server_port smallint,
-    client_ece smallint,
-    client_cwr smallint,
-    server_ece smallint,
-    client_fin smallint,
-    client_rst smallint,
-    server_fin smallint,
-    server_rst smallint,
-    stale smallint,
     client_00 integer,
     client_01 integer,
     client_10 integer,
@@ -21,4 +13,5 @@ CREATE TABLE public.ecn_measurements
     server_11 integer,
     client_cc character varying COLLATE pg_catalog."default",
     server_cc character varying COLLATE pg_catalog."default"
+    is_ipv4 smallint,
 )
