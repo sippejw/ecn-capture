@@ -8,9 +8,9 @@ use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
 use pnet::packet::{Packet};
-use pnet::packet::ipv4::{Ipv4Packet};
+use pnet::packet::ipv4::{Ipv4Packet, Ipv4OptionNumber, Ipv4OptionNumbers};
 use pnet::packet::ip::{IpNextHeaderProtocols};
-use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum};
+use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum, TcpOptionNumber};
 use rand::prelude::ThreadRng;
 use std::net::{IpAddr};
 use log::{error, info};
@@ -133,12 +133,12 @@ impl FlowTracker {
         self.stats.udp_packets_seen += 1;
         let flow = Flow::new_udp(&source, &destination, &udp_pkt);
         if self.tracked_udp_flows.contains(&flow) {
-            let conn = self.cache.udp_measurements_new.get_mut(&flow);
+            let conn = self.cache.udp_ecn_measurements_new.get_mut(&flow);
             if let Some(measurement) = conn{
                 measurement.measure(source, ecn);
             }
         } else if self.tracked_udp_flows.contains(&flow.reversed_clone()) {
-            let conn = self.cache.udp_measurements_new.get_mut(&flow.reversed_clone());
+            let conn = self.cache.udp_ecn_measurements_new.get_mut(&flow.reversed_clone());
             if let Some(measurement) = conn {
                 measurement.measure(source, ecn);
             }
@@ -148,13 +148,18 @@ impl FlowTracker {
             let dst_cc = self.country.lookup(destination).unwrap_or(None);
             let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination, src_cc, dst_cc);
             measurement.measure(source, ecn);
-            self.cache.add_udp_measurement(&flow, measurement);
+            self.cache.add_udp_ecn_measurement(&flow, measurement);
         }
     }
 
     pub fn handle_tcp_packet(&mut self, source: IpAddr, destination: IpAddr, tcp_pkt: &TcpPacket, ecn: u8) {
         self.stats.tcp_packets_seen += 1;
         let flow = Flow::new_tcp(&source, &destination, &tcp_pkt);
+        for option in tcp_pkt.get_options_iter() {
+            if option.get_number() == TcpOptionNumber::new(30) {
+                self.stats.mptcp_packets_seen += 1;
+            }
+        }
         let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.stats.connections_seen += 1;
@@ -163,14 +168,14 @@ impl FlowTracker {
                 self.begin_tracking_tcp_flow(&flow, tcp_pkt.packet().to_vec());
                 let src_cc = self.country.lookup(source).unwrap_or(None);
                 let dst_cc = self.country.lookup(destination).unwrap_or(None);
-                let measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
-                self.cache.add_tcp_measurement(&flow, measurement);
+                let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
+                self.cache.add_tcp_ecn_measurement(&flow, ecn_measurement);
             }
             return
         }
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) != 0 {
             if self.tracked_tcp_flows.contains(&flow.reversed_clone()) {
-                let conn = self.cache.tcp_measurements_new.get_mut(&flow.reversed_clone());
+                let conn = self.cache.tcp_ecn_measurements_new.get_mut(&flow.reversed_clone());
                 if let Some(ecn) = conn{
                     ecn.syn_ack(tcp_flags);
                 }
@@ -179,12 +184,12 @@ impl FlowTracker {
         }
         if (tcp_flags & TcpFlags::FIN) != 0 || (tcp_flags & TcpFlags::RST) != 0 {
             if self.tracked_tcp_flows.contains(&flow) {
-                let conn = self.cache.tcp_measurements_new.get_mut(&flow);
+                let conn = self.cache.tcp_ecn_measurements_new.get_mut(&flow);
                 if let Some(ecn) = conn{
                     ecn.close(source, tcp_flags);
                 }
             } else if self.tracked_tcp_flows.contains(&flow.reversed_clone()) {
-                let conn = self.cache.tcp_measurements_new.get_mut(&flow.reversed_clone());
+                let conn = self.cache.tcp_ecn_measurements_new.get_mut(&flow.reversed_clone());
                 if let Some(ecn) = conn {
                     ecn.close(source, tcp_flags);
                 }
@@ -197,12 +202,12 @@ impl FlowTracker {
             return
         }
         if self.tracked_tcp_flows.contains(&flow) {
-            let conn = self.cache.tcp_measurements_new.get_mut(&flow);
+            let conn = self.cache.tcp_ecn_measurements_new.get_mut(&flow);
             if let Some(measurement) = conn{
                 measurement.measure(source, ecn);
             } 
         } else if self.tracked_tcp_flows.contains(&flow.reversed_clone()) {
-            let conn = self.cache.tcp_measurements_new.get_mut(&flow.reversed_clone());
+            let conn = self.cache.tcp_ecn_measurements_new.get_mut(&flow.reversed_clone());
             if let Some(measurement) = conn {
                 measurement.measure(source, ecn);
             }
@@ -215,8 +220,8 @@ impl FlowTracker {
     }
 
     pub fn flush_to_db(&mut self) {
-        let tcp_ecn_cache = self.cache.flush_tcp_measurements();
-        let udp_ecn_cache = self.cache.flush_udp_measurements();
+        let tcp_ecn_cache = self.cache.flush_tcp_ecn_measurements();
+        let udp_ecn_cache = self.cache.flush_udp_ecn_measurements();
 
         if self.tcp_dsn != None {
             let tcp_dsn = self.tcp_dsn.clone().unwrap();

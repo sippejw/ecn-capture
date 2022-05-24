@@ -16,6 +16,7 @@ pub struct StatsTracker {
     pub connections_closed: u64,
 
     pub udp_packets_seen: u64,
+    pub mptcp_packets_seen: u64,
 }
 
 impl StatsTracker {
@@ -35,6 +36,7 @@ impl StatsTracker {
             connections_closed: 0,
 
             udp_packets_seen: 0,
+            mptcp_packets_seen: 0,
         }
     }
 
