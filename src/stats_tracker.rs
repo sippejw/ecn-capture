@@ -16,7 +16,13 @@ pub struct StatsTracker {
     pub connections_closed: u64,
 
     pub udp_packets_seen: u64,
+
+    //mptcp
     pub mptcp_packets_seen: u64,
+    pub mptcp_capable: u64,
+    pub mptcp_join: u64,
+    pub mptcp_data: u64,
+    pub mptcp_add: u64,
 }
 
 impl StatsTracker {
@@ -36,7 +42,13 @@ impl StatsTracker {
             connections_closed: 0,
 
             udp_packets_seen: 0,
+
+            // mptcp
             mptcp_packets_seen: 0,
+            mptcp_capable: 0,
+            mptcp_join: 0,
+            mptcp_data: 0,
+            mptcp_add: 0,
         }
     }
 
@@ -60,7 +72,7 @@ impl StatsTracker {
         }
 
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
-        info!("[general stats] drops: {} {} all packets: {} [ipv4: {}, ipv6: {}] tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; udp packets: {} Gbps: {:.4}",
+        info!("[general stats] drops: {} {} all packets: {} [ipv4: {}, ipv6: {}] tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; udp packets: {} mptcp packets seen: {} [capable: {}, join: {}, data: {}, ADD: {}], Gbps: {:.4}",
                 curr_drops,
                 total_drops,
                 self.total_packets,
@@ -71,6 +83,11 @@ impl StatsTracker {
                 self.connections_started,
                 self.connections_seen,
                 self.udp_packets_seen,
+                self.mptcp_packets_seen,
+                self.mptcp_capable,
+                self.mptcp_join,
+                self.mptcp_data,
+                self.mptcp_add,
                 self.bytes_processed as f64 / (BYTES_TO_GBPS * diff_float),
         );
 
@@ -84,6 +101,11 @@ impl StatsTracker {
         self.connections_seen = 0;
 
         self.udp_packets_seen = 0;
+
+        self.mptcp_packets_seen = 0;
+        self.mptcp_join = 0;
+        self.mptcp_data = 0;
+        self.mptcp_add = 0;
 
         self.last_print = curr_time;
     }
