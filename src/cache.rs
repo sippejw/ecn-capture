@@ -4,13 +4,13 @@ pub const UDP_CONNECTION_TIMEOUT: i64 = 60;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{ecn_structs::{TCP_ECN, UDP_ECN}, common::Flow};
+use crate::{ecn_structs::{TcpEcn, UdpEcn}, common::Flow};
 
 pub struct MeasurementCache {
     pub last_flush: time::Tm,
-    pub tcp_ecn_measurements_new: HashMap<Flow, TCP_ECN>,
+    pub tcp_ecn_measurements_new: HashMap<Flow, TcpEcn>,
     tcp_ecn_measurements_flushed: HashSet<Flow>,
-    pub udp_ecn_measurements_new: HashMap<Flow, UDP_ECN>,
+    pub udp_ecn_measurements_new: HashMap<Flow, UdpEcn>,
     udp_ecn_measurements_flushed: HashSet<Flow>,
 }
 
@@ -25,21 +25,21 @@ impl MeasurementCache {
         }
     }
 
-    pub fn add_tcp_ecn_measurement(&mut self, flow: &Flow, ecn: TCP_ECN) {
+    pub fn add_tcp_ecn_measurement(&mut self, flow: &Flow, ecn: TcpEcn) {
         if !self.tcp_ecn_measurements_flushed.contains(&flow) {
             self.tcp_ecn_measurements_new.insert(*flow, ecn);
         }
     }
 
-    pub fn add_udp_ecn_measurement(&mut self, flow: &Flow, ecn: UDP_ECN) {
+    pub fn add_udp_ecn_measurement(&mut self, flow: &Flow, ecn: UdpEcn) {
         if !self.udp_ecn_measurements_flushed.contains(&flow) {
             self.udp_ecn_measurements_new.insert(*flow, ecn);
         }
     }
 
-    pub fn flush_tcp_ecn_measurements(&mut self) -> HashMap<Flow, TCP_ECN> {
+    pub fn flush_tcp_ecn_measurements(&mut self) -> HashMap<Flow, TcpEcn> {
         self.last_flush = time::now();
-        let mut measurements_ready = HashMap::<Flow, TCP_ECN>::new();
+        let mut measurements_ready = HashMap::<Flow, TcpEcn>::new();
         let mut stale_measurement_flows = HashSet::new();
         let curr_time = time::now().to_timespec().sec;
         for (flow, ecn) in self.tcp_ecn_measurements_new.iter_mut() {
@@ -58,9 +58,9 @@ impl MeasurementCache {
         return measurements_ready
     }
 
-    pub fn flush_udp_ecn_measurements(&mut self) -> HashMap<Flow, UDP_ECN> {
+    pub fn flush_udp_ecn_measurements(&mut self) -> HashMap<Flow, UdpEcn> {
         self.last_flush = time::now();
-        let mut measurements_ready = HashMap::<Flow, UDP_ECN>::new();
+        let mut measurements_ready = HashMap::<Flow, UdpEcn>::new();
         let mut stale_measurement_flows = HashSet::new();
         let curr_time = time::now().to_timespec().sec;
         for (flow, ecn) in self.udp_ecn_measurements_new.iter_mut() {

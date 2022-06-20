@@ -63,3 +63,7 @@ pub struct TimedFlow {
     pub event_time: Instant,
     pub flow: Flow,
 }
+
+pub fn u8_to_u16_be(first_byte: u8, second_byte: u8) -> u16 {
+    (first_byte as u16) << 8 | (second_byte as u16)
+}

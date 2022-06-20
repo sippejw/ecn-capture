@@ -4,12 +4,11 @@ extern crate postgres;
 use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::collections::{HashSet, VecDeque};
-use pnet::packet::ethernet::EtherTypes::Ptp;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
 use pnet::packet::{Packet};
-use pnet::packet::ipv4::{Ipv4Packet, Ipv4OptionNumber, Ipv4OptionNumbers};
+use pnet::packet::ipv4::{Ipv4Packet};
 use pnet::packet::ip::{IpNextHeaderProtocols};
 use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum, TcpOptionNumber};
 use rand::prelude::ThreadRng;
@@ -22,8 +21,8 @@ use rand::Rng;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
-use crate::common::{TimedFlow, Flow};
-use crate::ecn_structs::{TCP_ECN, UDP_ECN};
+use crate::common::{TimedFlow, Flow, u8_to_u16_be};
+use crate::ecn_structs::{TcpEcn, UdpEcn};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -124,6 +123,16 @@ impl FlowTracker {
                             self.stats.bad_checksums += 1;
                         }
                     }
+                },
+                IpNextHeaderProtocols::Udp => {
+                    if let Some(udp_pkt) = UdpPacket::new(&ipv6_pkt.payload()) {
+                        self.handle_udp_packet(
+                            IpAddr::V6(ipv6_pkt.get_source()),
+                            IpAddr::V6(ipv6_pkt.get_destination()),
+                            &udp_pkt,
+                            ipv6_pkt.get_traffic_class() & 0b0000011,
+                        )
+                    }
                 }
                 _ => return,
             }
@@ -147,10 +156,19 @@ impl FlowTracker {
             self.begin_tracking_udp_flow(&flow);
             let src_cc = self.country.lookup(source).unwrap_or(None);
             let dst_cc = self.country.lookup(destination).unwrap_or(None);
-            let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination, src_cc, dst_cc);
+            let mut measurement = UdpEcn::new(udp_pkt.get_destination(), source, destination, src_cc, dst_cc);
             measurement.measure(source, ecn);
             self.cache.add_udp_ecn_measurement(&flow, measurement);
         }
+        if udp_pkt.payload().len() == 0 {
+            return;
+        }
+        match (udp_pkt.get_destination(), udp_pkt.get_source()) {
+            (443, _) => self.handle_quic_record(true, source, destination, udp_pkt.payload(), &flow),
+            (_, 443) => self.handle_quic_record(false, source, destination, udp_pkt.payload(), &flow.reversed_clone()),
+            (_, _) => {},
+        }
+
     }
 
     pub fn handle_tcp_packet(&mut self, source: IpAddr, destination: IpAddr, tcp_pkt: &TcpPacket, ecn: u8) {
@@ -161,7 +179,7 @@ impl FlowTracker {
                 self.stats.mptcp_packets_seen += 1;
                 let dat = option.payload();
                 let mptcp_subtype = dat[0] >> 4;
-                let mptcp_version = dat[0] & 0b00001111;
+                let _mptcp_version = dat[0] & 0b00001111;
                 match mptcp_subtype {
                     0b00 => self.stats.mptcp_capable += 1,
                     0b01 => self.stats.mptcp_join += 1,
@@ -179,7 +197,7 @@ impl FlowTracker {
                 self.begin_tracking_tcp_flow(&flow, tcp_pkt.packet().to_vec());
                 let src_cc = self.country.lookup(source).unwrap_or(None);
                 let dst_cc = self.country.lookup(destination).unwrap_or(None);
-                let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
+                let ecn_measurement = TcpEcn::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
                 self.cache.add_tcp_ecn_measurement(&flow, ecn_measurement);
             }
             return
@@ -228,6 +246,89 @@ impl FlowTracker {
             MEASUREMENT_CACHE_FLUSH {
             self.flush_to_db()
         }
+    }
+
+    pub fn handle_quic_record(&mut self, is_client: bool, source: IpAddr, destination: IpAddr, record: &[u8], flow: &Flow) {
+        self.parse_header(record);
+    }
+
+    pub fn parse_header(&mut self, record: &[u8]) {
+        const SHORT: u8 = 0b01;
+        const LONG: u8 = 0b11;
+        // The highest order bit indicates the packet form.
+        // The second highest order bit is a checkbit that should always be 1;
+        let packet_form = record[0] >> 6 & 0b00000011;
+        if packet_form == SHORT {
+            self.parse_short_header(record, 8);
+        } else if packet_form == LONG {
+            self.parse_long_header(record);
+        } else {
+            return;
+        }
+    }
+
+    pub fn parse_long_header(&mut self, record: &[u8]) {
+        let mut offset = 0;
+        let packet_type = record[offset] >> 4 & 0b00000011;
+        let reserved = record[offset] >> 2 & 0b00000011;
+        let packet_num_len = (record[offset] & 0b00000011) as usize;
+        offset += 1;
+        let version = &record[offset..offset+4];
+        print!("{:x?}", version);
+        offset += 4;
+        match packet_type {
+            0b00 => {self.parse_init(&record[offset..], packet_num_len)},
+            //0b01 => {self.parse_0_rtt(&record[offset..])},
+            0b10 => {},
+            0b11 => {self.parse_retry(&record[offset..])},
+            _ => {}
+        }
+    }
+
+    pub fn parse_retry(&mut self, record: &[u8]) {
+        let mut offset = 0;
+        let dest_cid_len = record[offset] as usize;
+        offset += 1;
+        let dest_cid = &record[offset..offset+dest_cid_len];
+        offset += dest_cid_len;
+        let src_cid_len = record[offset] as usize;
+        offset += 1;
+        let src_cid = &record[offset..offset+src_cid_len];
+        offset += src_cid_len;
+        let retry_token = &record[offset..record.len()-16];
+        offset = record.len()-16;
+        let retry_integrity_tag = &record[offset..];
+    }
+
+    pub fn parse_init(&mut self, record: &[u8], packet_num_len: usize) {
+        let mut offset = 0;
+        let dest_cid_len = record[offset] as usize;
+        offset += 1;
+        let dest_cid = &record[offset..offset+dest_cid_len];
+        offset += dest_cid_len;
+        let src_cid_len = record[offset] as usize;
+        offset += 1;
+        let src_cid = &record[offset..offset+src_cid_len];
+        offset += src_cid_len;
+        let token_len = record[offset] as usize;
+        offset += 1;
+        let token = &record[offset..offset+token_len];
+        offset += token_len;
+        let packet_len = u8_to_u16_be(record[offset], record[offset+1]);
+    }
+
+    pub fn parse_short_header(&mut self, record: &[u8], cid_len: usize) {
+        let mut offset = 0;
+        let spin_bit = record[offset] >> 5 & 0b00000001;
+        let reserved = record[offset] >> 3 & 0b00000011;
+        let key_phase = record[offset] >> 2 & 0b00000001;
+        let packet_num_len = (record[offset] & 0b00000011) as usize;
+        offset += 1;
+        let cid = &record[offset..offset+cid_len];
+        offset += cid_len;
+        let packet_number = &record[offset+packet_num_len];
+        offset += packet_num_len;
+        return;
     }
 
     pub fn flush_to_db(&mut self) {

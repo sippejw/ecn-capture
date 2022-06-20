@@ -4,7 +4,7 @@ use pnet::packet::tcp::{TcpFlags};
 use maxminddb::geoip2::{Country};
 
 #[derive(Clone)]
-pub struct TCP_ECN {
+pub struct TcpEcn {
     pub start_time: i64,
     pub last_updated: i64,
 
@@ -39,8 +39,8 @@ pub struct TCP_ECN {
     pub server_11: i32,
 }
 
-impl TCP_ECN {
-    pub fn syn(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>, tcp_flags: u16) -> TCP_ECN {
+impl TcpEcn {
+    pub fn syn(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>, tcp_flags: u16) -> TcpEcn {
         let curr_time = time::now().to_timespec().sec;
         let mut server_cc: Option<String> = None;
         let mut client_cc: Option<String> = None;
@@ -58,7 +58,7 @@ impl TCP_ECN {
                 }
             }
         }
-        TCP_ECN {
+        TcpEcn {
             start_time: curr_time,
             last_updated: curr_time,
             server_port: dst_port,
@@ -139,7 +139,7 @@ impl TCP_ECN {
 
 
 #[derive(Clone)]
-pub struct UDP_ECN {
+pub struct UdpEcn {
     pub start_time: i64,
     pub last_updated: i64,
 
@@ -164,8 +164,8 @@ pub struct UDP_ECN {
     pub server_11: i32,
 }
 
-impl UDP_ECN {
-    pub fn new(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>) -> UDP_ECN {
+impl UdpEcn {
+    pub fn new(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>) -> UdpEcn {
         let curr_time = time::now().to_timespec().sec;
         let mut server_cc: Option<String> = None;
         let mut client_cc: Option<String> = None;
@@ -183,7 +183,7 @@ impl UDP_ECN {
                 }
             }
         }
-        UDP_ECN {
+        UdpEcn {
             start_time: curr_time,
             last_updated: curr_time,
             server_port: dst_port,
