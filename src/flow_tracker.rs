@@ -18,6 +18,8 @@ use maxminddb::Reader;
 use std::{thread};
 use postgres::{Client, NoTls};
 use rand::Rng;
+use std::io::Write;
+use std::fs::OpenOptions;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
@@ -58,6 +60,15 @@ impl FlowTracker {
             (core_id as i64) * MEASUREMENT_CACHE_FLUSH / (total_cores as i64)
         ));
         ft
+    }
+
+    pub fn log_packet(&mut self, contents: &String, file_path: &str) -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(file_path)?;
+        file.write_all(contents.as_bytes())?;
+        Ok(())
     }
 
     pub fn handle_ipv4_packet(&mut self, eth_pkt: &EthernetPacket) {
@@ -174,6 +185,7 @@ impl FlowTracker {
     pub fn handle_tcp_packet(&mut self, source: IpAddr, destination: IpAddr, tcp_pkt: &TcpPacket, ecn: u8) {
         self.stats.tcp_packets_seen += 1;
         let flow = Flow::new_tcp(&source, &destination, &tcp_pkt);
+        let tcp_flags = tcp_pkt.get_flags();
         for option in tcp_pkt.get_options_iter() {
             if option.get_number() == TcpOptionNumber::new(30) {
                 self.stats.mptcp_packets_seen += 1;
@@ -181,7 +193,13 @@ impl FlowTracker {
                 let mptcp_subtype = dat[0] >> 4;
                 let _mptcp_version = dat[0] & 0b00001111;
                 match mptcp_subtype {
-                    0b00 => self.stats.mptcp_capable += 1,
+                    0b00 => {
+                        self.stats.mptcp_capable += 1;
+                        if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
+                            let log = format!("{}, {}\n", destination, tcp_pkt.get_destination());
+                            self.log_packet(&log, "/home/sippejw/ecn-capture/logs/mptcp.hosts");
+                        }
+                    },
                     0b01 => self.stats.mptcp_join += 1,
                     0b10 => self.stats.mptcp_data += 1,
                     0b11 => self.stats.mptcp_add += 1,
@@ -189,7 +207,6 @@ impl FlowTracker {
                 }
             }
         }
-        let tcp_flags = tcp_pkt.get_flags();
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.stats.connections_seen += 1;
             if self.rand.gen_range(0..10) > -1 {

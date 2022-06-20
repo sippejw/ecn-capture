@@ -72,7 +72,7 @@ impl StatsTracker {
         }
 
         const BYTES_TO_GBPS: f64 = (1000 * 1000 * 1000 / 8) as f64;
-        info!("[general stats] drops: {} {} all packets: {} [ipv4: {}, ipv6: {}] tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; udp packets: {} mptcp packets seen: {} [capable: {}, join: {}, data: {}, ADD: {}], Gbps: {:.4}",
+        info!("[general stats] drops: {} {} all packets: {} [ipv4: {}, ipv6: {}] tcp packets: {} (bad tcp checksums: {}) connections started: {} / connections seen: {}; udp packets: {} mptcp packets seen: {} [capable: {}, join: {}, data: {}, add: {}], Gbps: {:.4}",
                 curr_drops,
                 total_drops,
                 self.total_packets,
@@ -103,6 +103,7 @@ impl StatsTracker {
         self.udp_packets_seen = 0;
 
         self.mptcp_packets_seen = 0;
+        self.mptcp_capable = 0;
         self.mptcp_join = 0;
         self.mptcp_data = 0;
         self.mptcp_add = 0;
