@@ -46,6 +46,8 @@ pub struct StatsTracker {
     pub quic_short_short_header: u64,
     pub quic_client_attempted_version_negotiation: u64,
     pub quic_invalid_version_length: u64,
+    pub quic_short_handshake: u64,
+    pub quic_short_zero_rtt: u64,
 }
 
 impl StatsTracker {
@@ -92,6 +94,8 @@ impl StatsTracker {
             quic_short_short_header: 0,
             quic_client_attempted_version_negotiation: 0,
             quic_invalid_version_length: 0,
+            quic_short_handshake: 0,
+            quic_short_zero_rtt: 0,
         }
     }
 
@@ -103,7 +107,7 @@ impl StatsTracker {
     }
 
     pub fn print_quic_stats(&mut self) {
-        info!("[quic stats] quic count: {} [version negotiation: {}, init: {}, retry: {}, handshake: {}, zero rtt: {}, short header: {}] errors: {} [unknown header: {}, unknown packet: {}, short vn: {}, short retry: {}, short init: {}, short long: {}, short short: {}, client vn: {}, invalid version length: {}]",
+        info!("[quic stats] quic count: {} [version negotiation: {}, init: {}, retry: {}, handshake: {}, zero rtt: {}, short header: {}] errors: {} [unknown header: {}, unknown packet: {}, short vn: {}, short retry: {}, short init: {},  short handshake: {} short zero rtt: {} short long: {}, short short: {}, client vn: {}, invalid version length: {}]",
             self.quic_packets,
             self.quic_version_negotiation,
             self.quic_inits,
@@ -117,6 +121,8 @@ impl StatsTracker {
             self.quic_short_version_negotiation,
             self.quic_short_retry,
             self.quic_short_init,
+            self.quic_short_handshake,
+            self.quic_short_zero_rtt,
             self.quic_short_long_header,
             self.quic_short_short_header,
             self.quic_client_attempted_version_negotiation,
@@ -138,6 +144,8 @@ impl StatsTracker {
         self.quic_short_version_negotiation = 0;
         self.quic_short_retry = 0;
         self.quic_short_init = 0;
+        self.quic_short_handshake = 0;
+        self.quic_short_zero_rtt = 0;
         self.quic_short_long_header = 0;
         self.quic_short_short_header = 0;
         self.quic_client_attempted_version_negotiation = 0;
@@ -221,6 +229,8 @@ impl StatsTracker {
             QuicParseError::ShortLongHeader => self.quic_short_long_header += 1,
             QuicParseError::ShortShortHeader => self.quic_short_short_header += 1,
             QuicParseError::InvalidVersionLength => self.quic_invalid_version_length += 1,
+            QuicParseError::ShortZeroRttPacket => self.quic_short_zero_rtt += 1,
+            QuicParseError::ShortHandshakePacket => self.quic_short_handshake += 1,
         }
     }
 }

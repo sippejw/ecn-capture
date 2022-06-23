@@ -29,6 +29,8 @@ pub enum QuicParseError {
     ShortInitPacket,
     ShortLongHeader,
     ShortShortHeader,
+    ShortZeroRttPacket,
+    ShortHandshakePacket,
     ClientAttemptedVersionNegotiation,
     InvalidVersionLength,
 }
@@ -241,8 +243,11 @@ impl QuicConn {
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
+        if record.len() - 1 < packet_num_len {
+            return Err(QuicParseError::ShortInitPacket);
+        }
         let packet_num = &record[offset..offset+packet_num_len];
-        offset += 1;
+        offset += packet_num_len;
         let init = InitialPacket {
             dest_cid_len: dest_cid_len,
             dest_cid: dest_cid.to_vec(),
@@ -260,42 +265,45 @@ impl QuicConn {
     pub fn parse_zero_rtt(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let dest_cid_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let dest_cid = &record[offset..offset+dest_cid_len];
         offset += dest_cid_len;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let src_cid_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let src_cid = &record[offset..offset+src_cid_len];
         offset += src_cid_len;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let token_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + token_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let token = &record[offset..offset+token_len];
         offset += token_len;
         if record.len() - 1 < offset + 1 {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortZeroRttPacket);
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
+        if record.len() - 1 < packet_num_len {
+            return Err(QuicParseError::ShortZeroRttPacket);
+        }
         let packet_num = &record[offset..offset+packet_num_len];
-        offset += 1;
+        offset += packet_num_len;
         let zero_rtt = ZeroRttPacket {
             dest_cid_len: dest_cid_len,
             dest_cid: dest_cid.to_vec(),
@@ -313,42 +321,45 @@ impl QuicConn {
     pub fn parse_handshake(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let dest_cid_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let dest_cid = &record[offset..offset+dest_cid_len];
         offset += dest_cid_len;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let src_cid_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let src_cid = &record[offset..offset+src_cid_len];
         offset += src_cid_len;
         if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let token_len = record[offset] as usize;
         offset += 1;
         if record.len() - 1 < offset + token_len {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let token = &record[offset..offset+token_len];
         offset += token_len;
         if record.len() - 1 < offset + 1 {
-            return Err(QuicParseError::ShortInitPacket);
+            return Err(QuicParseError::ShortHandshakePacket);
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
+        if record.len() - 1 < packet_num_len {
+            return Err(QuicParseError::ShortHandshakePacket);
+        }
         let packet_num = &record[offset..offset+packet_num_len];
-        offset += 1;
+        offset += packet_num_len;
         let handshake = HandshakePacket {
             dest_cid_len: dest_cid_len,
             dest_cid: dest_cid.to_vec(),
