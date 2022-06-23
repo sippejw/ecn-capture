@@ -243,7 +243,7 @@ impl QuicConn {
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
-        if record.len() - 1 < packet_num_len {
+        if record.len() - 1 < offset + packet_num_len {
             return Err(QuicParseError::ShortInitPacket);
         }
         let packet_num = &record[offset..offset+packet_num_len];
@@ -299,7 +299,7 @@ impl QuicConn {
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
-        if record.len() - 1 < packet_num_len {
+        if record.len() - 1 < offset + packet_num_len {
             return Err(QuicParseError::ShortZeroRttPacket);
         }
         let packet_num = &record[offset..offset+packet_num_len];
@@ -355,7 +355,7 @@ impl QuicConn {
         }
         let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
         offset += 2;
-        if record.len() - 1 < packet_num_len {
+        if record.len() - 1 < offset + packet_num_len {
             return Err(QuicParseError::ShortHandshakePacket);
         }
         let packet_num = &record[offset..offset+packet_num_len];
