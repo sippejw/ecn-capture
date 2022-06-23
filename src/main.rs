@@ -2,6 +2,7 @@ mod flow_tracker;
 mod common;
 mod cache;
 mod ecn_structs;
+mod quic;
 mod stats_tracker;
 
 extern crate env_logger;

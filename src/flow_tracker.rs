@@ -4,6 +4,7 @@ extern crate postgres;
 use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::collections::{HashSet, VecDeque};
+use libc::EILSEQ;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
@@ -23,8 +24,9 @@ use std::fs::OpenOptions;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
-use crate::common::{TimedFlow, Flow, u8_to_u16_be};
+use crate::common::{TimedFlow, Flow};
 use crate::ecn_structs::{TcpEcn, UdpEcn};
+use crate::quic::{QuicConn, QuicParseResult, QuicParseError};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -36,6 +38,8 @@ pub struct FlowTracker {
     stale_tcp_drops: VecDeque<TimedFlow>,
     tracked_udp_flows: HashSet<Flow>,
     stale_udp_drops: VecDeque<TimedFlow>,
+    tracked_quic_conns: HashSet<Flow>,
+    stale_quic_drops: VecDeque<TimedFlow>,
     rand: ThreadRng,
     pub gre_offset: usize,
 }
@@ -52,6 +56,8 @@ impl FlowTracker {
             stale_tcp_drops: VecDeque::with_capacity(65536),
             tracked_udp_flows: HashSet::new(),
             stale_udp_drops: VecDeque::with_capacity(65536),
+            tracked_quic_conns: HashSet::new(),
+            stale_quic_drops: VecDeque::with_capacity(65536),
             rand: rand::thread_rng(),
             gre_offset: gre_offset,
         };
@@ -265,87 +271,20 @@ impl FlowTracker {
         }
     }
 
-    pub fn handle_quic_record(&mut self, is_client: bool, source: IpAddr, destination: IpAddr, record: &[u8], flow: &Flow) {
-        self.parse_header(record);
-    }
-
-    pub fn parse_header(&mut self, record: &[u8]) {
-        const SHORT: u8 = 0b01;
-        const LONG: u8 = 0b11;
-        // The highest order bit indicates the packet form.
-        // The second highest order bit is a checkbit that should always be 1;
-        let packet_form = record[0] >> 6 & 0b00000011;
-        if packet_form == SHORT {
-            self.parse_short_header(record, 8);
-        } else if packet_form == LONG {
-            self.parse_long_header(record);
+    pub fn handle_quic_record(&mut self, is_client: bool, source: IpAddr, _destination: IpAddr, record: &[u8], flow: &Flow) {
+        let conn;
+        if self.tracked_quic_conns.contains(flow) {
+            conn = self.cache.quic_conns_new.get_mut(flow).unwrap();
         } else {
-            return;
+            self.begin_tracking_quic_conn(flow);
+            self.cache.quic_conns_new.insert(*flow, QuicConn::new_conn(source.is_ipv4() as u8, 443).unwrap());
+            conn = self.cache.quic_conns_new.get_mut(flow).unwrap();
         }
-    }
-
-    pub fn parse_long_header(&mut self, record: &[u8]) {
-        let mut offset = 0;
-        let packet_type = record[offset] >> 4 & 0b00000011;
-        let reserved = record[offset] >> 2 & 0b00000011;
-        let packet_num_len = (record[offset] & 0b00000011) as usize;
-        offset += 1;
-        let version = &record[offset..offset+4];
-        print!("{:x?}", version);
-        offset += 4;
-        match packet_type {
-            0b00 => {self.parse_init(&record[offset..], packet_num_len)},
-            //0b01 => {self.parse_0_rtt(&record[offset..])},
-            0b10 => {},
-            0b11 => {self.parse_retry(&record[offset..])},
-            _ => {}
+        let result = conn.parse_header(record, is_client);
+        match result {
+            Ok(res) => self.stats.handle_quic_result(res),
+            Err(e) => self.stats.handle_quic_error(e),
         }
-    }
-
-    pub fn parse_retry(&mut self, record: &[u8]) {
-        let mut offset = 0;
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        let retry_token = &record[offset..record.len()-16];
-        offset = record.len()-16;
-        let retry_integrity_tag = &record[offset..];
-    }
-
-    pub fn parse_init(&mut self, record: &[u8], packet_num_len: usize) {
-        let mut offset = 0;
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        let token_len = record[offset] as usize;
-        offset += 1;
-        let token = &record[offset..offset+token_len];
-        offset += token_len;
-        let packet_len = u8_to_u16_be(record[offset], record[offset+1]);
-    }
-
-    pub fn parse_short_header(&mut self, record: &[u8], cid_len: usize) {
-        let mut offset = 0;
-        let spin_bit = record[offset] >> 5 & 0b00000001;
-        let reserved = record[offset] >> 3 & 0b00000011;
-        let key_phase = record[offset] >> 2 & 0b00000001;
-        let packet_num_len = (record[offset] & 0b00000011) as usize;
-        offset += 1;
-        let cid = &record[offset..offset+cid_len];
-        offset += cid_len;
-        let packet_number = &record[offset+packet_num_len];
-        offset += packet_num_len;
-        return;
     }
 
     pub fn flush_to_db(&mut self) {
@@ -467,6 +406,14 @@ impl FlowTracker {
         self.tracked_udp_flows.insert(*flow);
     }
 
+    fn begin_tracking_quic_conn(&mut self, flow: &Flow) {
+        self.stale_quic_drops.push_back(TimedFlow {
+            event_time: Instant::now(),
+            flow: *flow,
+        });
+        self.tracked_quic_conns.insert(*flow);
+    }
+
     pub fn cleanup(&mut self) {
         while !self.stale_tcp_drops.is_empty() &&
             self.stale_tcp_drops.front().unwrap().event_time.elapsed() >= self.flow_timeout {
@@ -478,11 +425,16 @@ impl FlowTracker {
             let cur = self.stale_udp_drops.pop_front().unwrap();
             self.tracked_udp_flows.remove(&cur.flow);
         }
+        while !self.stale_quic_drops.is_empty() &&
+            self.stale_quic_drops.front().unwrap().event_time.elapsed() >= self.flow_timeout {
+            let cur = self.stale_quic_drops.pop_front().unwrap();
+            self.tracked_quic_conns.remove(&cur.flow);
+        }
     }
 
     pub fn debug_print(&mut self) {
         info!("tracked_tcp_flows: {} stale__tcp_drops: {}", self.tracked_tcp_flows.len(), self.stale_tcp_drops.len());
-        info!("tracked_udp_flows: {} stale__udo_drops: {}", self.tracked_udp_flows.len(), self.stale_udp_drops.len());
+        info!("tracked_udp_flows: {} stale__udp_drops: {}", self.tracked_udp_flows.len(), self.stale_udp_drops.len());
         self.stats.print_stats(0, 0);
     }
 }

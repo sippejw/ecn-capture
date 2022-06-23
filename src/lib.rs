@@ -3,6 +3,7 @@ mod cache;
 mod common;
 mod stats_tracker;
 mod ecn_structs;
+mod quic;
 
 use libc::{size_t, c_char};
 use pnet::packet::{ethernet::{EthernetPacket, EtherTypes}, Packet};
