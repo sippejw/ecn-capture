@@ -128,6 +128,7 @@ impl QuicConn {
     pub fn parse_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
         // The highest order bit indicates the packet form.
         // The second highest order bit is a checkbit that should always be 1;
+        self.last_updated = time::now().to_timespec().sec;
         let packet_form = record[0] >> 6 & 0b00000011;
         match packet_form {
             SHORT_HEADER => return self.parse_short_header(record, is_client),

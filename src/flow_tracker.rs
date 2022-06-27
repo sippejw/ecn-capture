@@ -157,8 +157,6 @@ impl FlowTracker {
 
     pub fn handle_udp_packet(&mut self, source: IpAddr, destination: IpAddr, udp_pkt: &UdpPacket, ecn: u8) {
         self.stats.udp_packets_seen += 1;
-        let log = format!("{}\n", udp_pkt.get_destination());
-        self.log_packet(&log, "/home/sippejw/ecn-capture/logs/udp.ports");
         let flow = Flow::new_udp(&source, &destination, &udp_pkt);
         if self.tracked_udp_flows.contains(&flow) {
             let conn = self.cache.udp_ecn_measurements_new.get_mut(&flow);
@@ -200,13 +198,7 @@ impl FlowTracker {
                 let mptcp_subtype = dat[0] >> 4;
                 let _mptcp_version = dat[0] & 0b00001111;
                 match mptcp_subtype {
-                    0b00 => {
-                        self.stats.mptcp_capable += 1;
-                        if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
-                            let log = format!("{}, {}\n", destination, tcp_pkt.get_destination());
-                            self.log_packet(&log, "/home/sippejw/ecn-capture/logs/mptcp.hosts");
-                        }
-                    },
+                    0b00 => self.stats.mptcp_capable += 1,
                     0b01 => self.stats.mptcp_join += 1,
                     0b10 => self.stats.mptcp_data += 1,
                     0b11 => self.stats.mptcp_add += 1,
@@ -279,7 +271,11 @@ impl FlowTracker {
         } else {
             self.begin_tracking_quic_conn(flow);
             self.cache.add_quic_conn(flow, QuicConn::new_conn(source.is_ipv4() as u8, 443).unwrap());
-            conn = self.cache.quic_conns_new.get_mut(flow).unwrap();
+            if let Some(c) = self.cache.quic_conns_new.get_mut(flow) {
+                conn = c;
+            } else {
+                return
+            }
         }
         let result = conn.parse_header(record, is_client);
         match result {
@@ -287,10 +283,6 @@ impl FlowTracker {
                 self.stats.handle_quic_result(res);
             },
             Err(e) => {
-                if e == QuicParseError::UnknownHeaderType {
-                    let log = format!("{:?}\n", &record);
-                    self.log_packet(&log, "/home/sippejw/ecn-capture/logs/failed_header.quic");
-                }
                 self.stats.handle_quic_error(e);
             },
         }
