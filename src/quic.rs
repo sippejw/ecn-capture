@@ -20,7 +20,7 @@ pub enum QuicParseResult {
     ParsedShortHeader,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum QuicParseError {
     UnknownHeaderType,
     UnknownPacketType,
@@ -142,7 +142,7 @@ impl QuicConn {
             return Err(QuicParseError::ShortLongHeader);
         }
         let packet_type = record[offset] >> 4 & 0b00000011;
-        let reserved = record[offset] >> 2 & 0b00000011;
+        let _reserved = record[offset] >> 2 & 0b00000011;
         let packet_num_len = ((record[offset] & 0b00000011) as usize) + 1;
         offset += 1;
         if record.len() - 1 < offset {
@@ -440,20 +440,20 @@ impl QuicConn {
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortShortHeader);
         }
-        let spin_bit = record[offset] >> 5 & 0b00000001;
-        let reserved = record[offset] >> 3 & 0b00000011;
-        let key_phase = record[offset] >> 2 & 0b00000001;
+        let _spin_bit = record[offset] >> 5 & 0b00000001;
+        let _reserved = record[offset] >> 3 & 0b00000011;
+        let _key_phase = record[offset] >> 2 & 0b00000001;
         let packet_num_len = ((record[offset] & 0b00000011) as usize) + 1;
         offset += 1;
         if record.len() - 1 < offset + dest_cid_len {
             return Err(QuicParseError::ShortShortHeader);
         }
-        let dst_cid = &record[offset..offset+dest_cid_len];
+        let _dst_cid = &record[offset..offset+dest_cid_len];
         offset += dest_cid_len;
         if record.len() - 1 < offset + packet_num_len {
             return Err(QuicParseError::ShortShortHeader);
         }
-        let packet_number = &record[offset+packet_num_len];
+        let _packet_number = &record[offset+packet_num_len];
         offset += packet_num_len;
         return Ok(QuicParseResult::ParsedShortHeader)
     }

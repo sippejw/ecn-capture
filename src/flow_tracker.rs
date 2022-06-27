@@ -4,7 +4,6 @@ extern crate postgres;
 use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::collections::{HashSet, VecDeque};
-use libc::EILSEQ;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
@@ -26,7 +25,7 @@ use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
 use crate::common::{TimedFlow, Flow};
 use crate::ecn_structs::{TcpEcn, UdpEcn};
-use crate::quic::{QuicConn, QuicParseResult, QuicParseError};
+use crate::quic::{QuicConn, QuicParseError};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -158,6 +157,8 @@ impl FlowTracker {
 
     pub fn handle_udp_packet(&mut self, source: IpAddr, destination: IpAddr, udp_pkt: &UdpPacket, ecn: u8) {
         self.stats.udp_packets_seen += 1;
+        let log = format!("{}\n", udp_pkt.get_destination());
+        self.log_packet(&log, "/home/sippejw/ecn-capture/logs/udp.ports");
         let flow = Flow::new_udp(&source, &destination, &udp_pkt);
         if self.tracked_udp_flows.contains(&flow) {
             let conn = self.cache.udp_ecn_measurements_new.get_mut(&flow);
@@ -277,19 +278,28 @@ impl FlowTracker {
             conn = self.cache.quic_conns_new.get_mut(flow).unwrap();
         } else {
             self.begin_tracking_quic_conn(flow);
-            self.cache.quic_conns_new.insert(*flow, QuicConn::new_conn(source.is_ipv4() as u8, 443).unwrap());
+            self.cache.add_quic_conn(flow, QuicConn::new_conn(source.is_ipv4() as u8, 443).unwrap());
             conn = self.cache.quic_conns_new.get_mut(flow).unwrap();
         }
         let result = conn.parse_header(record, is_client);
         match result {
-            Ok(res) => self.stats.handle_quic_result(res),
-            Err(e) => self.stats.handle_quic_error(e),
+            Ok(res) => {
+                self.stats.handle_quic_result(res);
+            },
+            Err(e) => {
+                if e == QuicParseError::UnknownHeaderType {
+                    let log = format!("{:?}\n", &record);
+                    self.log_packet(&log, "/home/sippejw/ecn-capture/logs/failed_header.quic");
+                }
+                self.stats.handle_quic_error(e);
+            },
         }
     }
 
     pub fn flush_to_db(&mut self) {
         let tcp_ecn_cache = self.cache.flush_tcp_ecn_measurements();
         let udp_ecn_cache = self.cache.flush_udp_ecn_measurements();
+        let quic_ecn_cache = self.cache.flush_quic_conns();
 
         if self.tcp_dsn != None {
             let tcp_dsn = self.tcp_dsn.clone().unwrap();
