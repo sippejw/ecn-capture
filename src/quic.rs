@@ -1,4 +1,5 @@
 use crate::common::u8_to_u16_be;
+use crate::crypto::{derive_initial_key_material, self};
 
 const SHORT_HEADER: u8 = 0b01;
 const LONG_HEADER: u8 = 0b11;
@@ -7,6 +8,15 @@ const INIT_PACKET: u8 = 0b00;
 const ZERO_RTT_PACKET: u8 = 0b01;
 const HANDSHAKE_PACKET: u8 = 0b10;
 const RETRY_PACKET: u8 = 0b11;
+
+// From CloudFlare's Quiche
+/// Supported QUIC versions.
+///
+/// Note that the older ones might not be fully supported.
+pub const PROTOCOL_VERSION_V1: u32 = 0x0000_0001;
+pub const PROTOCOL_VERSION_DRAFT27: u32 = 0xff00_001b;
+pub const PROTOCOL_VERSION_DRAFT28: u32 = 0xff00_001c;
+pub const PROTOCOL_VERSION_DRAFT29: u32 = 0xff00_001d;
 
 const VERSION_NEGOTIATION: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
 
@@ -33,6 +43,7 @@ pub enum QuicParseError {
     ShortHandshakePacket,
     ClientAttemptedVersionNegotiation,
     InvalidVersionLength,
+    CryptoFail,
 }
 
 #[derive(Debug, Clone)]
@@ -90,13 +101,13 @@ pub struct RetryPacket {
     retry_integrity_tag: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QuicConn {
     pub start_time: i64,
     pub last_updated: i64,
     pub is_ipv4: u8,
     pub server_port: u16,
-    pub quic_version: Vec<u8>,
+    pub quic_version: u32,
     pub version_negotiation_packets: Vec<VersionNegotiationPacket>,
     pub initial_packets: Vec<InitialPacket>,
     pub zero_rtt_packets: Vec<ZeroRttPacket>,
@@ -104,6 +115,8 @@ pub struct QuicConn {
     pub retry_packets: Vec<RetryPacket>,
     pub server_cids: Vec<Vec<u8>>,
     pub client_cids: Vec<Vec<u8>>,
+    pub client_decrypt: Option<crypto::Open>,
+    pub server_decrypt: Option<crypto::Open>,
 }
 
 impl QuicConn {
@@ -114,7 +127,7 @@ impl QuicConn {
             last_updated: curr_time,
             server_port: server_port,
             is_ipv4: is_ipv4,
-            quic_version: Vec::new(),
+            quic_version: 0,
             version_negotiation_packets: Vec::new(),
             initial_packets: Vec::new(),
             zero_rtt_packets: Vec::new(),
@@ -122,6 +135,8 @@ impl QuicConn {
             retry_packets: Vec::new(),
             server_cids: Vec::new(),
             client_cids: Vec::new(),
+            client_decrypt: None,
+            server_decrypt: None,
         })
     }
 
@@ -137,7 +152,7 @@ impl QuicConn {
         }
     }
 
-    pub fn parse_long_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_long_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortLongHeader);
@@ -166,7 +181,7 @@ impl QuicConn {
         }
     }
 
-    pub fn parse_version_negotiation(&mut self, record: &[u8]) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_version_negotiation(&mut self, record: &[u8]) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortVersionNegotiationPacket);
@@ -207,7 +222,7 @@ impl QuicConn {
         return Ok(QuicParseResult::ParsedVersionNegotiation)
     } 
 
-    pub fn parse_init(&mut self, record: &[u8], packet_num_len: usize, is_client: bool) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_init(&mut self, record: &[u8], packet_num_len: usize, is_client: bool) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortInitPacket);
@@ -260,10 +275,20 @@ impl QuicConn {
             packet_num: packet_num.to_vec(),
         };
         self.initial_packets.push(init);
+        if is_client && self.client_decrypt.is_none() && self.server_decrypt.is_none() {
+            self.decrypt_init(dest_cid)?;
+        }
+
         Ok(QuicParseResult::ParsedInit)
     }
 
-    pub fn parse_zero_rtt(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
+    fn decrypt_init(&mut self, dest_cid: &[u8]) -> Result<(), QuicParseError> {
+        self.client_decrypt = Some(crypto::derive_initial_key_material(dest_cid, self.quic_version, false)?);
+        self.server_decrypt = Some(crypto::derive_initial_key_material(dest_cid, self.quic_version, true)?);
+        Ok(())
+    }
+
+    fn parse_zero_rtt(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortZeroRttPacket);
@@ -319,7 +344,7 @@ impl QuicConn {
         Ok(QuicParseResult::ParsedZeroRTT)
     }
 
-    pub fn parse_handshake(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_handshake(&mut self, record: &[u8], packet_num_len: usize) -> Result<QuicParseResult, QuicParseError> {
         let mut offset = 0;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortHandshakePacket);
@@ -375,7 +400,7 @@ impl QuicConn {
         Ok(QuicParseResult::ParsedHandshake)
     }
 
-    pub fn parse_retry(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_retry(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
         // Parse packet
         let mut offset = 0;
         if record.len() - 1 < offset {
@@ -422,7 +447,7 @@ impl QuicConn {
         Ok(QuicParseResult::ParsedRetry)
     }
 
-    pub fn parse_short_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
+    fn parse_short_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
         let dest_cid_len;
         if is_client {
             if let Some(cid) = self.server_cids.last() {

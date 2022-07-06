@@ -48,6 +48,7 @@ pub struct StatsTracker {
     pub quic_invalid_version_length: u64,
     pub quic_short_handshake: u64,
     pub quic_short_zero_rtt: u64,
+    pub quic_crypto_fail: u64,
 }
 
 impl StatsTracker {
@@ -96,6 +97,7 @@ impl StatsTracker {
             quic_invalid_version_length: 0,
             quic_short_handshake: 0,
             quic_short_zero_rtt: 0,
+            quic_crypto_fail: 0,
         }
     }
 
@@ -231,6 +233,7 @@ impl StatsTracker {
             QuicParseError::InvalidVersionLength => self.quic_invalid_version_length += 1,
             QuicParseError::ShortZeroRttPacket => self.quic_short_zero_rtt += 1,
             QuicParseError::ShortHandshakePacket => self.quic_short_handshake += 1,
+            QuicParseError::CryptoFail => self.quic_crypto_fail += 1,
         }
     }
 }

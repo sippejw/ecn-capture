@@ -3,6 +3,7 @@ mod common;
 mod cache;
 mod ecn_structs;
 mod quic;
+mod crypto;
 mod stats_tracker;
 
 extern crate env_logger;
