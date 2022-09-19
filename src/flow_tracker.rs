@@ -4,18 +4,16 @@ extern crate postgres;
 use std::ops::Sub;
 use std::time::{Duration, Instant};
 use std::collections::{HashSet, VecDeque};
-use pnet::packet::ethernet::EtherTypes::Ptp;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
 use pnet::packet::udp::UdpPacket;
 use pnet::packet::{Packet};
-use pnet::packet::ipv4::{Ipv4Packet, Ipv4OptionNumber, Ipv4OptionNumbers};
+use pnet::packet::ipv4::{Ipv4Packet};
 use pnet::packet::ip::{IpNextHeaderProtocols};
-use pnet::packet::tcp::{TcpPacket, TcpFlags, ipv4_checksum, ipv6_checksum, TcpOptionNumber};
+use pnet::packet::tcp::{TcpPacket, TcpFlags, TcpOptionNumber};
 use rand::prelude::ThreadRng;
 use std::net::{IpAddr};
 use log::{error, info};
-use maxminddb::Reader;
 use std::{thread};
 use postgres::{Client, NoTls};
 use rand::Rng;
@@ -30,7 +28,6 @@ pub struct FlowTracker {
     tcp_dsn: Option<String>,
     cache: MeasurementCache,
     pub stats: StatsTracker,
-    country: Reader<Vec<u8>>,
     tracked_tcp_flows: HashSet<Flow>,
     stale_tcp_drops: VecDeque<TimedFlow>,
     tracked_udp_flows: HashSet<Flow>,
@@ -46,7 +43,6 @@ impl FlowTracker {
             tcp_dsn: tcp_dsn,
             cache: MeasurementCache::new(),
             stats: StatsTracker::new(),
-            country:  Reader::open_readfile("data/GeoLite2-Country.mmdb").unwrap(),
             tracked_tcp_flows: HashSet::new(),
             stale_tcp_drops: VecDeque::with_capacity(65536),
             tracked_udp_flows: HashSet::new(),
@@ -73,16 +69,12 @@ impl FlowTracker {
             match ipv4_pkt.get_next_level_protocol() {
                 IpNextHeaderProtocols::Tcp => {
                     if let Some(tcp_pkt) = TcpPacket::new(&ipv4_pkt.payload()) {
-                        if ipv4_checksum(&tcp_pkt, &ipv4_pkt.get_source(), &ipv4_pkt.get_destination()) == tcp_pkt.get_checksum() {
-                            self.handle_tcp_packet(
-                                IpAddr::V4(ipv4_pkt.get_source()),
-                                IpAddr::V4(ipv4_pkt.get_destination()),
-                                &tcp_pkt,
-                                ipv4_pkt.get_ecn(),
-                            )
-                        } else {
-                            self.stats.bad_checksums += 1;
-                        }
+                        self.handle_tcp_packet(
+                            IpAddr::V4(ipv4_pkt.get_source()),
+                            IpAddr::V4(ipv4_pkt.get_destination()),
+                            &tcp_pkt,
+                            ipv4_pkt.get_ecn(),
+                        )
                     }
                 },
                 IpNextHeaderProtocols::Udp => {
@@ -112,17 +104,12 @@ impl FlowTracker {
             match ipv6_pkt.get_next_header() {
                 IpNextHeaderProtocols::Tcp => {
                     if let Some(tcp_pkt) = TcpPacket::new(ipv6_pkt.payload()) {
-                        if ipv6_checksum(&tcp_pkt, &ipv6_pkt.get_source(), &ipv6_pkt.get_destination()) ==
-                            tcp_pkt.get_checksum() {
-                            self.handle_tcp_packet(
-                                IpAddr::V6(ipv6_pkt.get_source()),
-                                IpAddr::V6(ipv6_pkt.get_destination()),
-                                &tcp_pkt,
-                                ipv6_pkt.get_traffic_class() & 0b0000011,
-                            )
-                        } else {
-                            self.stats.bad_checksums += 1;
-                        }
+                        self.handle_tcp_packet(
+                            IpAddr::V6(ipv6_pkt.get_source()),
+                            IpAddr::V6(ipv6_pkt.get_destination()),
+                            &tcp_pkt,
+                            ipv6_pkt.get_traffic_class() & 0b0000011,
+                        )
                     }
                 }
                 _ => return,
@@ -145,9 +132,7 @@ impl FlowTracker {
             }
         } else {
             self.begin_tracking_udp_flow(&flow);
-            let src_cc = self.country.lookup(source).unwrap_or(None);
-            let dst_cc = self.country.lookup(destination).unwrap_or(None);
-            let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination, src_cc, dst_cc);
+            let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination);
             measurement.measure(source, ecn);
             self.cache.add_udp_ecn_measurement(&flow, measurement);
         }
@@ -177,9 +162,7 @@ impl FlowTracker {
             if self.rand.gen_range(0..10) > -1 {
                 self.stats.connections_started += 1;
                 self.begin_tracking_tcp_flow(&flow, tcp_pkt.packet().to_vec());
-                let src_cc = self.country.lookup(source).unwrap_or(None);
-                let dst_cc = self.country.lookup(destination).unwrap_or(None);
-                let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, src_cc, dst_cc, tcp_flags);
+                let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, tcp_flags);
                 self.cache.add_tcp_ecn_measurement(&flow, ecn_measurement);
             }
             return
@@ -247,8 +230,6 @@ impl FlowTracker {
                         last_updated,
                         server_port,
                         is_ipv4,
-                        client_cc,
-                        server_cc,
                         client_ece,
                         client_cwr,
                         server_ece,
@@ -265,7 +246,7 @@ impl FlowTracker {
                         server_01,
                         server_10,
                         server_11)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22);"
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20);"
                 )
                 {
                     Ok(stmt) => stmt,
@@ -276,7 +257,7 @@ impl FlowTracker {
                 };
                 for (_k, ecn) in tcp_ecn_cache {
                     let updated_rows = thread_db_conn.execute(&insert_tcp_measurement, &[&(ecn.start_time),
-                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.is_ipv4 as i16), &(ecn.client_cc), &(ecn.server_cc),
+                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.is_ipv4 as i16),
                         &(ecn.client_ece as i16), &(ecn.client_cwr as i16), &(ecn.server_ece as i16), &(ecn.client_fin as i16),
                         &(ecn.client_rst as i16), &(ecn.server_fin as i16), &(ecn.server_rst as i16), &(ecn.stale as i16), &(ecn.client_00),
                         &(ecn.client_01), &(ecn.client_10), &(ecn.client_11), &(ecn.server_00), &(ecn.server_01),
@@ -293,8 +274,6 @@ impl FlowTracker {
                         last_updated,
                         server_port,
                         is_ipv4,
-                        client_cc,
-                        server_cc,
                         client_00,
                         client_01,
                         client_10,
@@ -303,7 +282,7 @@ impl FlowTracker {
                         server_01,
                         server_10,
                         server_11)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);"
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);"
                 )
                 {
                     Ok(stmt) => stmt,
@@ -314,7 +293,7 @@ impl FlowTracker {
                 };
                 for (_k, ecn) in udp_ecn_cache {
                     let updated_rows = thread_db_conn.execute(&insert_udp_measurement, &[&(ecn.start_time),
-                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.is_ipv4 as i16), &(ecn.client_cc), &(ecn.server_cc), &(ecn.client_00),
+                        &(ecn.last_updated), &(ecn.server_port as i16), &(ecn.is_ipv4 as i16), &(ecn.client_00),
                         &(ecn.client_01), &(ecn.client_10), &(ecn.client_11), &(ecn.server_00), &(ecn.server_01),
                         &(ecn.server_10), &(ecn.server_11)]);
                     if updated_rows.is_err() {

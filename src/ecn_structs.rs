@@ -1,7 +1,6 @@
 use std::net::IpAddr;
 
 use pnet::packet::tcp::{TcpFlags};
-use maxminddb::geoip2::{Country};
 
 #[derive(Clone)]
 pub struct TCP_ECN {
@@ -13,9 +12,7 @@ pub struct TCP_ECN {
     pub is_ipv4: u8,
 
     pub server_port: u16,
-    // IP country codes for anon
-    pub client_cc: Option<String>,
-    pub server_cc: Option<String>,
+
     // TCP handshake flags
     pub client_ece: u8,
     pub client_cwr: u8,
@@ -40,24 +37,8 @@ pub struct TCP_ECN {
 }
 
 impl TCP_ECN {
-    pub fn syn(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>, tcp_flags: u16) -> TCP_ECN {
+    pub fn syn(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, tcp_flags: u16) -> TCP_ECN {
         let curr_time = time::now().to_timespec().sec;
-        let mut server_cc: Option<String> = None;
-        let mut client_cc: Option<String> = None;
-        if let Some(country) = src_country {
-            if let Some(valid_country) = country.country {
-                if let Some(valid_iso) = valid_country.iso_code {
-                    client_cc = Some(valid_iso.to_string());
-                }
-            }
-        }
-        if let Some(country) = dst_country {
-            if let Some(valid_country) = country.country {
-                if let Some(valid_iso) = valid_country.iso_code {
-                    server_cc = Some(valid_iso.to_string());
-                }
-            }
-        }
         TCP_ECN {
             start_time: curr_time,
             last_updated: curr_time,
@@ -65,8 +46,6 @@ impl TCP_ECN {
             server_ip: dst_ip,
             client_ip: src_ip,
             is_ipv4: src_ip.is_ipv4() as u8,
-            server_cc: server_cc,
-            client_cc: client_cc,
             client_ece: ((tcp_flags & TcpFlags::ECE) >> 6) as u8,
             client_cwr: ((tcp_flags & TcpFlags::CWR) >> 7) as u8,
             server_ece: 0,
@@ -148,9 +127,6 @@ pub struct UDP_ECN {
     pub is_ipv4: u8,
 
     pub server_port: u16,
-    // IP country codes for anon
-    pub client_cc: Option<String>,
-    pub server_cc: Option<String>,
 
     // Packets from client measurements
     pub client_00: i32,
@@ -165,24 +141,8 @@ pub struct UDP_ECN {
 }
 
 impl UDP_ECN {
-    pub fn new(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr, src_country: Option<Country>, dst_country: Option<Country>) -> UDP_ECN {
+    pub fn new(dst_port: u16, src_ip: IpAddr, dst_ip: IpAddr) -> UDP_ECN {
         let curr_time = time::now().to_timespec().sec;
-        let mut server_cc: Option<String> = None;
-        let mut client_cc: Option<String> = None;
-        if let Some(country) = src_country {
-            if let Some(valid_country) = country.country {
-                if let Some(valid_iso) = valid_country.iso_code {
-                    client_cc = Some(valid_iso.to_string());
-                }
-            }
-        }
-        if let Some(country) = dst_country {
-            if let Some(valid_country) = country.country {
-                if let Some(valid_iso) = valid_country.iso_code {
-                    server_cc = Some(valid_iso.to_string());
-                }
-            }
-        }
         UDP_ECN {
             start_time: curr_time,
             last_updated: curr_time,
@@ -190,8 +150,6 @@ impl UDP_ECN {
             server_ip: dst_ip,
             client_ip: src_ip,
             is_ipv4: src_ip.is_ipv4() as u8,
-            server_cc: server_cc,
-            client_cc: client_cc,
             client_00: 0,
             client_01: 0,
             client_10: 0,
