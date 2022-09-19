@@ -157,21 +157,18 @@ impl FlowTracker {
             if option.get_number() == TcpOptionNumber::new(30) {
                 self.stats.mptcp_packets_seen += 1;
                 let dat = option.payload();
-                let mptcp_subtype = dat[0] >> 4;
-                let mptcp_version = dat[0] & 0b00001111;
-                match mptcp_subtype {
-                    0b00 => {
-                        self.stats.mptcp_capable += 1;
-                        if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
-                            let log = format!("{}, {}\n", destination, tcp_pkt.get_destination());
-                            self.log_packet(&log, "/home/sippejw/ecn-capture/logs/mptcp.hosts");
-                        }
-                    },
-                    0b01 => self.stats.mptcp_join += 1,
-                    0b10 => self.stats.mptcp_data += 1,
-                    0b11 => self.stats.mptcp_add += 1,
-                    _ => {}
+                if dat.len() > 0 {
+                    let mptcp_subtype = dat[0] >> 4;
+                    let mptcp_version = dat[0] & 0b00001111;
+                    match mptcp_subtype {
+                        0b00 => self.stats.mptcp_capable += 1,
+                        0b01 => self.stats.mptcp_join += 1,
+                        0b10 => self.stats.mptcp_data += 1,
+                        0b11 => self.stats.mptcp_add += 1,
+                        _ => {}
+                    }
                 }
+
             }
         }
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
