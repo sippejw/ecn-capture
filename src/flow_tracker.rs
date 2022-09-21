@@ -34,6 +34,8 @@ pub struct FlowTracker {
     stale_tcp_drops: VecDeque<TimedFlow>,
     tracked_udp_flows: HashSet<Flow>,
     stale_udp_drops: VecDeque<TimedFlow>,
+    prevented_udp_flows: HashSet<Flow>,
+    stale_udp_preventions: VecDeque<TimedFlow>,
     rand: ThreadRng,
     pub gre_offset: usize,
 }
@@ -49,6 +51,8 @@ impl FlowTracker {
             stale_tcp_drops: VecDeque::with_capacity(65536),
             tracked_udp_flows: HashSet::new(),
             stale_udp_drops: VecDeque::with_capacity(65536),
+            prevented_udp_flows: HashSet::new(),
+            stale_udp_preventions: VecDeque::with_capacity(65536),
             rand: rand::thread_rng(),
             gre_offset: gre_offset,
         };
@@ -142,10 +146,14 @@ impl FlowTracker {
                 measurement.measure(source, ecn);
             }
         } else {
-            self.begin_tracking_udp_flow(&flow);
-            let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination);
-            measurement.measure(source, ecn);
-            self.cache.add_udp_ecn_measurement(&flow, measurement);
+            if self.rand.gen_range(0..10) > 4 {
+                self.begin_tracking_udp_flow(&flow);
+                let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination);
+                measurement.measure(source, ecn);
+                self.cache.add_udp_ecn_measurement(&flow, measurement);
+            } else {
+                self.prevent_tracking_udp_flow(&flow);
+            }
         }
     }
 
@@ -173,7 +181,7 @@ impl FlowTracker {
         }
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.stats.connections_seen += 1;
-            if self.rand.gen_range(0..10) > -1 {
+            if self.rand.gen_range(0..10) > 4 {
                 self.stats.connections_started += 1;
                 self.begin_tracking_tcp_flow(&flow, tcp_pkt.packet().to_vec());
                 let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, tcp_flags);
@@ -342,6 +350,14 @@ impl FlowTracker {
         self.tracked_udp_flows.insert(*flow);
     }
 
+    fn prevent_tracking_udp_flow(&mut self, flow: &Flow) {
+        self.stale_udp_preventions.push_back(TimedFlow {
+            event_time: Instant::now(),
+            flow: *flow,
+        });
+        self.prevented_udp_flows.insert(*flow);
+    }
+
     pub fn cleanup(&mut self) {
         while !self.stale_tcp_drops.is_empty() &&
             self.stale_tcp_drops.front().unwrap().event_time.elapsed() >= self.flow_timeout {
@@ -352,6 +368,11 @@ impl FlowTracker {
             self.stale_udp_drops.front().unwrap().event_time.elapsed() >= self.flow_timeout {
             let cur = self.stale_udp_drops.pop_front().unwrap();
             self.tracked_udp_flows.remove(&cur.flow);
+        }
+        while !self.stale_udp_preventions.is_empty() &&
+            self.stale_udp_preventions.front().unwrap().event_time.elapsed() >= self.flow_timeout {
+            let cur = self.stale_udp_preventions.pop_front().unwrap();
+            self.prevented_udp_flows.remove(&cur.flow);
         }
     }
 
