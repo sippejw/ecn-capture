@@ -48,7 +48,7 @@ int g_update_overloaded_decoys_when_convenient = 0;
 
 #define TIMESPEC_DIFF(a, b) ((a.tv_sec - b.tv_sec)*1000000000LL + \
                              ((int64_t)a.tv_nsec - (int64_t)b.tv_nsec))
-void the_program(uint8_t core_id, unsigned int log_interval, char* tcp_db_source_name, int gre_offset) {
+void the_program(uint8_t core_id, unsigned int log_interval, char* tcp_db_source_name, int gre_offset, bool debug) {
     struct RustGlobalsStruct rust_globals = rust_init(core_id, g_num_worker_procs, tcp_db_source_name, gre_offset);
     void* rust_ptr = (void*) &rust_globals;
 
@@ -102,7 +102,7 @@ void the_program(uint8_t core_id, unsigned int log_interval, char* tcp_db_source
             drops_cur = stats.drop;
             prev_cleanup = cur_time_ns;
             rust_periodic_cleanup(rust_ptr);
-            rust_print_avg_stats(rust_ptr, (drops_cur-drops_prev), drops_cur);
+            rust_print_avg_stats(rust_ptr, (drops_cur-drops_prev), drops_cur, debug);
             drops_prev = drops_cur;
         }
     }
@@ -188,7 +188,7 @@ void startup_pfring_maybezc(unsigned int cluster_id, int proc_ind, int cluster_q
 }
 
 pid_t start_process(int core_affinity, unsigned int cluster_id,
-                             int proc_ind, unsigned int log_interval, char* tcp_db_source_name, int cluster_queue_offset, int gre_offset)
+                             int proc_ind, unsigned int log_interval, char* tcp_db_source_name, int cluster_queue_offset, int gre_offset, bool debug)
 {
     pid_t the_pid = fork();
     if(the_pid == 0)
@@ -200,7 +200,7 @@ pid_t start_process(int core_affinity, unsigned int cluster_id,
         signal(SIGINT, sigproc_child);
         signal(SIGTERM, sigproc_child);
         signal(SIGPIPE, ignore_sigpipe);
-        the_program(proc_ind, log_interval, tcp_db_source_name, gre_offset);
+        the_program(proc_ind, log_interval, tcp_db_source_name, gre_offset, debug);
     }
     printf("Core %d: PID %d, lcore %d\n", proc_ind, the_pid, core_affinity);
     return the_pid;
@@ -231,6 +231,7 @@ struct cmd_options
     char*           tcp_db_source_name; // DSN for SQL database
 
     size_t          gre_offset;
+    bool            debug;
 };
 
 void parse_cmd_args(int argc, char* argv[], struct cmd_options* options)
@@ -245,7 +246,7 @@ void parse_cmd_args(int argc, char* argv[], struct cmd_options* options)
     int skip_core = -1; // If >0, skip this core when incrementing
 
     char c;
-    while ((c = getopt(argc,argv,"m:n:t:c:o:l:s:g:")) != -1)
+    while ((c = getopt(argc,argv,"m:n:t:c:o:l:s:g:d")) != -1)
     {
         switch (c)
         {
@@ -272,6 +273,9 @@ void parse_cmd_args(int argc, char* argv[], struct cmd_options* options)
                 break;
             case 'g':
                 options->gre_offset = atoi(optarg);
+                break;
+            case 'd':
+                options->debug = true;
                 break;
             default:
                 fprintf(stderr, "Unknown option %c\n", c);
@@ -333,7 +337,7 @@ int main(int argc, char* argv[]) {
 
         if (core_num == options.skip_core) core_num++;
         g_forked_pids[i] = start_process(core_num, options.cluster_id, i,
-            options.log_interval, options.tcp_db_source_name, options.cluster_queue_offset, options.gre_offset);
+            options.log_interval, options.tcp_db_source_name, options.cluster_queue_offset, options.gre_offset, options.debug);
         core_num++;
     }
     signal(SIGINT, sigproc_parent);

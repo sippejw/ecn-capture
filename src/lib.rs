@@ -60,10 +60,12 @@ pub extern "C" fn rust_process_packet(globals_ptr: *mut RustGlobalsStruct, raw_e
 }
 
 #[no_mangle]
-pub extern "C" fn rust_print_avg_stats(globals_ptr: *mut RustGlobalsStruct, current: i64, total: i64) {
+pub extern "C" fn rust_print_avg_stats(globals_ptr: *mut RustGlobalsStruct, current: i64, total: i64, debug: bool) {
     let globals = unsafe { &mut *globals_ptr };
     let ft = unsafe { &mut *globals.ft };
-
+    if debug {
+        ft.debug_print();
+    }
     ft.stats.print_stats(current, total);
 }
 

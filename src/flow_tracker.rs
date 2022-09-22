@@ -19,6 +19,7 @@ use postgres::{Client, NoTls};
 use rand::Rng;
 use std::io::Write;
 use std::fs::OpenOptions;
+use std::mem;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
@@ -146,7 +147,7 @@ impl FlowTracker {
                 measurement.measure(source, ecn);
             }
         } else {
-            if self.rand.gen_range(0..10) > 4 {
+            if self.rand.gen_range(0..10) > -1 {
                 self.begin_tracking_udp_flow(&flow);
                 let mut measurement = UDP_ECN::new(udp_pkt.get_destination(), source, destination);
                 measurement.measure(source, ecn);
@@ -181,7 +182,7 @@ impl FlowTracker {
         }
         if (tcp_flags & TcpFlags::SYN) != 0 && (tcp_flags & TcpFlags::ACK) == 0 {
             self.stats.connections_seen += 1;
-            if self.rand.gen_range(0..10) > 4 {
+            if self.rand.gen_range(0..10) > -1 {
                 self.stats.connections_started += 1;
                 self.begin_tracking_tcp_flow(&flow, tcp_pkt.packet().to_vec());
                 let ecn_measurement = TCP_ECN::syn(tcp_pkt.get_destination(), source, destination, tcp_flags);
@@ -377,8 +378,10 @@ impl FlowTracker {
     }
 
     pub fn debug_print(&mut self) {
-        info!("tracked_tcp_flows: {} stale__tcp_drops: {}", self.tracked_tcp_flows.len(), self.stale_tcp_drops.len());
-        info!("tracked_udp_flows: {} stale__udo_drops: {}", self.tracked_udp_flows.len(), self.stale_udp_drops.len());
-        self.stats.print_stats(0, 0);
+        info!("tracked_tcp_flows: {} stale__tcp_drops: {}", mem::size_of_val(&self.tracked_tcp_flows), mem::size_of_val(&self.stale_tcp_drops));
+        info!("tracked_udp_flows: {} stale__udp_drops: {}", mem::size_of_val(&self.tracked_udp_flows), mem::size_of_val(&self.stale_udp_drops));
+        info!("Size of TCP Measurements: {}, Size of TCP Flush: {}", mem::size_of_val(&self.cache.tcp_ecn_measurements_new), mem::size_of_val(&self.cache.tcp_ecn_measurements_flushed));
+        info!("Size of UDP Measurements: {}, Size of UDP Flush: {}", mem::size_of_val(&self.cache.udp_ecn_measurements_new), mem::size_of_val(&self.cache.udp_ecn_measurements_flushed));
+        info!("Size of UDP Preventions: {}, Size of UDP Preventions Flush: {}", mem::size_of_val(&self.prevented_udp_flows), mem::size_of_val(&self.stale_udp_preventions));
     }
 }

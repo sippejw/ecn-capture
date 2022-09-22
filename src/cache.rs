@@ -9,9 +9,9 @@ use crate::{ecn_structs::{TCP_ECN, UDP_ECN}, common::Flow};
 pub struct MeasurementCache {
     pub last_flush: time::Tm,
     pub tcp_ecn_measurements_new: HashMap<Flow, TCP_ECN>,
-    tcp_ecn_measurements_flushed: HashSet<Flow>,
+    pub tcp_ecn_measurements_flushed: HashSet<Flow>,
     pub udp_ecn_measurements_new: HashMap<Flow, UDP_ECN>,
-    udp_ecn_measurements_flushed: HashSet<Flow>,
+    pub udp_ecn_measurements_flushed: HashSet<Flow>,
 }
 
 impl MeasurementCache {
