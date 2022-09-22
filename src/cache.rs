@@ -2,7 +2,7 @@ pub const MEASUREMENT_CACHE_FLUSH: i64 = 60; // every min
 pub const TCP_CONNECTION_TIMEOUT: i64 = 60;
 pub const UDP_CONNECTION_TIMEOUT: i64 = 60;
 
-use std::collections::{HashMap, HashSet};
+use std::{collections::{HashMap, HashSet}, mem};
 
 use crate::{ecn_structs::{TCP_ECN, UDP_ECN}, common::Flow};
 
@@ -41,10 +41,11 @@ impl MeasurementCache {
         self.last_flush = time::now();
         let mut measurements_ready = HashMap::<Flow, TCP_ECN>::new();
         let mut stale_measurement_flows = HashSet::new();
+        let mut new_flush = HashSet::new();
         let curr_time = time::now().to_timespec().sec;
         for (flow, ecn) in self.tcp_ecn_measurements_new.iter_mut() {
             if ecn.client_fin != 0 || ecn.client_rst != 0 || ecn.server_fin != 0 || ecn.server_rst != 0 {
-                self.tcp_ecn_measurements_flushed.insert(*flow);
+                new_flush.insert(*flow);
                 stale_measurement_flows.insert(*flow);
             } else if curr_time - ecn.last_updated > TCP_CONNECTION_TIMEOUT {
                 ecn.stale = 1;
@@ -55,6 +56,7 @@ impl MeasurementCache {
         for flow in stale_measurement_flows {
             measurements_ready.insert(flow, self.tcp_ecn_measurements_new.remove(&flow).unwrap());
         }
+        mem::replace(&mut self.tcp_ecn_measurements_flushed, new_flush);
         return measurements_ready
     }
 
@@ -62,16 +64,18 @@ impl MeasurementCache {
         self.last_flush = time::now();
         let mut measurements_ready = HashMap::<Flow, UDP_ECN>::new();
         let mut stale_measurement_flows = HashSet::new();
+        let mut new_flush = HashSet::new();
         let curr_time = time::now().to_timespec().sec;
         for (flow, ecn) in self.udp_ecn_measurements_new.iter_mut() {
             if curr_time - ecn.last_updated > UDP_CONNECTION_TIMEOUT {
-                self.tcp_ecn_measurements_flushed.insert(*flow);
+                new_flush.insert(*flow);
                 stale_measurement_flows.insert(*flow);
             }
         }
         for flow in stale_measurement_flows {
             measurements_ready.insert(flow, self.udp_ecn_measurements_new.remove(&flow).unwrap());
         }
+        mem::replace(&mut self.udp_ecn_measurements_flushed, new_flush);
         return measurements_ready
     }
 }
