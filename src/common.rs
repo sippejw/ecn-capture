@@ -2,6 +2,7 @@ use std::net::{IpAddr};
 use std::hash::{Hash, Hasher};
 use std::time::{Instant};
 
+use memuse::DynamicUsage;
 use pnet::packet::tcp::TcpPacket;
 use pnet::packet::udp::UdpPacket;
 
@@ -48,6 +49,16 @@ impl PartialEq for Flow {
     }
 }
 
+impl DynamicUsage for Flow {
+    fn dynamic_usage(&self) -> usize {
+        // Assuming worst case (IPv6 Addresses)
+        return 4 + 4 + 16 + 16
+    }
+    fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
+        return (4+4+16+16, None);
+    }
+}
+
 impl Eq for Flow {}
 
 impl Hash for Flow {
@@ -62,4 +73,14 @@ impl Hash for Flow {
 pub struct TimedFlow {
     pub event_time: Instant,
     pub flow: Flow,
+}
+
+impl DynamicUsage for TimedFlow {
+    fn dynamic_usage(&self) -> usize {
+        // Assuming worst case (IPv6 Addresses)
+        return self.flow.dynamic_usage() + 16
+    }
+    fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
+        return (self.flow.dynamic_usage()+16, None);
+    }
 }

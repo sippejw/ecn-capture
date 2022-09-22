@@ -11,6 +11,7 @@
 #include <time.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include "pfring_zc.h"
 #define pfring_maybezc_stat pfring_zc_stat

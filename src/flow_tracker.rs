@@ -19,7 +19,7 @@ use postgres::{Client, NoTls};
 use rand::Rng;
 use std::io::Write;
 use std::fs::OpenOptions;
-use std::mem;
+use memuse::DynamicUsage;
 
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
@@ -378,10 +378,10 @@ impl FlowTracker {
     }
 
     pub fn debug_print(&mut self) {
-        info!("tracked_tcp_flows: {} stale__tcp_drops: {}", mem::size_of_val(&self.tracked_tcp_flows), mem::size_of_val(&self.stale_tcp_drops));
-        info!("tracked_udp_flows: {} stale__udp_drops: {}", mem::size_of_val(&self.tracked_udp_flows), mem::size_of_val(&self.stale_udp_drops));
-        info!("Size of TCP Measurements: {}, Size of TCP Flush: {}", mem::size_of_val(&self.cache.tcp_ecn_measurements_new), mem::size_of_val(&self.cache.tcp_ecn_measurements_flushed));
-        info!("Size of UDP Measurements: {}, Size of UDP Flush: {}", mem::size_of_val(&self.cache.udp_ecn_measurements_new), mem::size_of_val(&self.cache.udp_ecn_measurements_flushed));
-        info!("Size of UDP Preventions: {}, Size of UDP Preventions Flush: {}", mem::size_of_val(&self.prevented_udp_flows), mem::size_of_val(&self.stale_udp_preventions));
+        info!("tracked_tcp_flows: {} stale__tcp_drops: {}", self.tracked_tcp_flows.dynamic_usage(), self.stale_tcp_drops.dynamic_usage());
+        info!("tracked_udp_flows: {} stale__udp_drops: {}", self.tracked_udp_flows.dynamic_usage(), self.stale_udp_drops.dynamic_usage());
+        info!("Size of TCP Measurements: {}, Size of TCP Flush: {}", self.cache.tcp_ecn_measurements_new.dynamic_usage(), self.cache.tcp_ecn_measurements_flushed.dynamic_usage());
+        info!("Size of UDP Measurements: {}, Size of UDP Flush: {}", self.cache.udp_ecn_measurements_new.dynamic_usage(), self.cache.udp_ecn_measurements_flushed.dynamic_usage());
+        info!("Size of UDP Preventions: {}, Size of UDP Preventions Flush: {}", self.prevented_udp_flows.dynamic_usage(), self.stale_udp_preventions.dynamic_usage());
     }
 }

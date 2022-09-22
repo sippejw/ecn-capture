@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use memuse::DynamicUsage;
 use pnet::packet::tcp::{TcpFlags};
 
 #[derive(Clone)]
@@ -116,6 +117,15 @@ impl TCP_ECN {
     }
 }
 
+impl DynamicUsage for TCP_ECN {
+    fn dynamic_usage(&self) -> usize {
+        // Assuming worst case (IPv6 Addresses)
+        return 8 + 8 + 16 + 16 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4
+    }
+    fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
+        return (8 + 8 + 16 + 16 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4, None);
+    }
+}
 
 #[derive(Clone)]
 pub struct UDP_ECN {
@@ -194,5 +204,15 @@ impl UDP_ECN {
             _ => {}
         }
         self.last_updated = time::now().to_timespec().sec;
+    }
+}
+
+impl DynamicUsage for UDP_ECN {
+    fn dynamic_usage(&self) -> usize {
+        // Assuming worst case (IPv6 Addresses)
+        return 8 + 8 + 16 + 16 + 1 + 2 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4
+    }
+    fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
+        return (8 + 8 + 16 + 16 + 1 + 2 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4, None);
     }
 }
