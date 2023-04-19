@@ -3,7 +3,7 @@ extern crate hex_slice;
 extern crate crypto;
 extern crate byteorder;
 
-use std::fmt;
+use std::fmt::{self, Debug};
 use crate::common;
 
 use self::num::FromPrimitive;
@@ -42,6 +42,8 @@ pub enum HelloParseError {
     PskKeyExchangeModesExtLenMisparse,
     SupportedVersionsExtShort,
     SupportedVersionsExtLenMisparse,
+
+    UnknownQuicTransportParameter,
 }
 
 enum_from_primitive! {
@@ -103,6 +105,7 @@ pub enum TlsExtension {
     EarlyData                        = 0x002A,
     PreSharedKey                     = 0x0029,
     RecordSizeLimit                  = 0x001C,
+    QuicTransportParameters          = 0x0039,
 }
 }
 
@@ -116,6 +119,98 @@ pub enum TlsVersion {
 	TLS11 = 0x0302,
 	TLS12 = 0x0303,
 }
+}
+
+enum_from_primitive! {
+#[repr(u16)]
+#[derive(Debug, Hash, PartialEq, Clone, Copy)]
+pub enum QuicTransportParams {
+    OriginalDestinationConnectionID = 0x0000,
+    IdleTimeout                     = 0x0001,
+    StatelessResetToken             = 0x0002,
+    MaxUdpPayloadSize               = 0x0003,
+    InitialMaxData                  = 0x0004,
+    InitialMaxStreamDataBidiLocal   = 0x0005,
+    InitialMaxStreamDataBidiRemote  = 0x0006,
+    InitialMaxStreamDataUni         = 0x0007,
+    InitialMaxStreamsBidi           = 0x0008,
+    InitialMaxStreamsUni            = 0x0009,
+    AckDelayExponent                = 0x000A,
+    MaxAckDelay                     = 0x000B,
+    DisableMigration                = 0x000C,
+    ActiveConnectionIDLimit         = 0x000E,
+    InitialSourceConnectionID       = 0x000F,
+    RetrySourceConnectionID         = 0x0010,
+    VersionInformation              = 0x0011,
+    MaxDatagramFrameSize            = 0x0020,
+    InitialRtt                      = 0x3127,
+    GoogleConnectionOptions         = 0x3128,
+    GoogleVersion                   = 0x4752,
+    DatagramFlightSize              = 0x0012,
+    NegotiatedVersion               = 0x0013,
+}
+}
+
+#[derive(Debug, PartialEq)]
+pub struct QuicTransportFingerprint {
+    pub idle_timeout: Vec<u8>, 
+    pub max_udp_payload_size: Vec<u8>, 
+    pub initial_max_data: Vec<u8>,
+    pub initial_max_stream_data_bidi_local: Vec<u8>,
+    pub initial_max_stream_data_bidi_remote: Vec<u8>,
+    pub initial_max_stream_data_uni: Vec<u8>,
+    pub initial_max_streams_bidi: Vec<u8>,
+    pub initial_max_streams_uni: Vec<u8>,
+    pub ack_delay_exponent: Vec<u8>,
+    pub max_ack_delay: Vec<u8>,
+    pub active_connection_id_limit: Vec<u8>,
+    pub ids: Vec<u32>,
+}
+
+impl QuicTransportFingerprint {
+    pub fn get_fingerprint(&self) -> u64 {
+        let mut hasher = Sha1::new();
+        hash_u32(&mut hasher, self.idle_timeout.len() as u32);
+        hasher.input(&self.idle_timeout);
+
+        hash_u32(&mut hasher, self.max_udp_payload_size.len() as u32);
+        hasher.input(&self.max_udp_payload_size);
+
+        hash_u32(&mut hasher, self.initial_max_data.len() as u32);
+        hasher.input(&self.initial_max_data);
+
+        hash_u32(&mut hasher, self.initial_max_stream_data_bidi_local.len() as u32);
+        hasher.input(&self.initial_max_stream_data_bidi_local);
+
+        hash_u32(&mut hasher, self.initial_max_stream_data_bidi_remote.len() as u32);
+        hasher.input(&self.initial_max_stream_data_bidi_remote);
+
+        hash_u32(&mut hasher, self.initial_max_stream_data_uni.len() as u32);
+        hasher.input(&self.initial_max_stream_data_uni);
+
+        hash_u32(&mut hasher, self.initial_max_streams_bidi.len() as u32);
+        hasher.input(&self.initial_max_streams_bidi);
+
+        hash_u32(&mut hasher, self.initial_max_streams_uni.len() as u32);
+        hasher.input(&self.initial_max_streams_uni);
+
+        hash_u32(&mut hasher, self.ack_delay_exponent.len() as u32);
+        hasher.input(&self.ack_delay_exponent);
+
+        hash_u32(&mut hasher, self.max_ack_delay.len() as u32);
+        hasher.input(&self.max_ack_delay);
+
+        hash_u32(&mut hasher, self.active_connection_id_limit.len() as u32);
+        hasher.input(&self.active_connection_id_limit);
+
+        hash_u32(&mut hasher, self.ids.len() as u32);
+        for id in &self.ids {
+            hash_u32(&mut hasher, *id);
+        }
+        let mut result = [0; 20];
+        hasher.result(&mut result);
+        BigEndian::read_u64(&result[0..8])
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -140,6 +235,8 @@ pub struct ClientHelloFingerprint {
     pub supported_versions: Vec<u8>,
     pub cert_compression_algs: Vec<u8>,
     pub record_size_limit : Vec<u8>,
+    pub quic_transport_fp: Option<QuicTransportFingerprint>,
+    pub quic_transport_fp_id: u64,
 }
 
 pub type ClientHelloParseResult = Result<ClientHelloFingerprint, HelloParseError>;
@@ -150,23 +247,6 @@ impl ClientHelloFingerprint {
         if a.len() < 42 {
             return Err(HelloParseError::ShortBuffer);
         }
-
-        // let record_type = a[offset];
-        // if TlsRecordType::from_u8(record_type) != Some(TlsRecordType::Handshake) {
-        //     return Err(HelloParseError::NotAHandshake);
-        // }
-        // offset += 1;
-        // let record_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[offset], a[offset+1])) {
-        //     Some(tls_version) => tls_version,
-        //     None => return Err(HelloParseError::UnknownRecordTLSVersion),
-        // };
-        // offset += 2;
-
-        // let record_length = u8_to_u16_be(a[offset], a[offset+1]);
-        // if usize::from_u16(record_length).unwrap() > a.len() - 5 {
-        //     return Err(HelloParseError::ShortOuterRecord);
-        // }
-        // offset += 2;
 
         if TlsHandshakeType::from_u8(a[offset]) != Some(TlsHandshakeType::ClientHello) {
             return Err(HelloParseError::NotAClientHello);
@@ -232,6 +312,8 @@ impl ClientHelloFingerprint {
             supported_versions: Vec::new(),
             cert_compression_algs: Vec::new(),
             record_size_limit: Vec::new(),
+            quic_transport_fp: None,
+            quic_transport_fp_id: 0,
         };
 
         let ch_end = offset + extensions_len;
@@ -326,12 +408,90 @@ impl ClientHelloFingerprint {
             }
             Some(TlsExtension::RecordSizeLimit) => {
                 self.record_size_limit = ext_data.to_vec();
+            },
+            Some(TlsExtension::QuicTransportParameters) => {
+                // self.quic_transport_fp = Some(self.handle_quic_transport_parameters(ext_data)?);
+                // self.quic_transport_fp_id = self.quic_transport_fp.as_ref().unwrap().get_fingerprint();
             }
             _ => {}
         };
 
         self.extensions.append(&mut ungrease_u8(ext_id_u8));
         Ok(())
+    }
+
+    pub fn handle_quic_transport_parameters(&mut self, ext_data: &[u8]) -> Result<QuicTransportFingerprint, HelloParseError> {
+        let mut offset = 0;
+        let mut transport_params = QuicTransportFingerprint{
+            idle_timeout: Vec::with_capacity(0), 
+            max_udp_payload_size: Vec::with_capacity(0), 
+            initial_max_data: Vec::with_capacity(0),
+            initial_max_stream_data_bidi_local: Vec::with_capacity(0),
+            initial_max_stream_data_bidi_remote: Vec::with_capacity(0),
+            initial_max_stream_data_uni: Vec::with_capacity(0),
+            initial_max_streams_bidi: Vec::with_capacity(0),
+            initial_max_streams_uni: Vec::with_capacity(0),
+            ack_delay_exponent: Vec::with_capacity(0),
+            max_ack_delay: Vec::with_capacity(0),
+            active_connection_id_limit: Vec::with_capacity(0),
+            ids: Vec::with_capacity(0),
+        };
+        while offset < ext_data.len() {
+            let ext_type_len = ((ext_data[offset] >> 6) + 1) as usize;
+            let mut ext_type: Vec<u8> = Vec::new();
+            for i in 0..4-ext_type_len {
+                ext_type.push(0);
+            }
+            for i in 0..ext_type_len {
+                ext_type.push(ext_data[offset+i]);
+            }
+            ext_type[4-ext_type_len] &= 0b00111111;
+            let ext_type_int = u8_to_u32_be(ext_type[0], ext_type[1], ext_type[2], ext_type[3]);
+            offset += ext_type_len;
+
+            let ext_len_len = ((ext_data[offset] >> 6) + 1) as usize;
+            let mut ext_len: Vec<u8> = Vec::new();
+            for i in 0..4-ext_len_len {
+                ext_len.push(0);
+            }
+            for i in 0..ext_len_len {
+                ext_len.push(ext_data[offset+i]);
+            }
+            ext_len[4-ext_len_len] &= 0b00111111;
+            let ext_len_int = u8_to_u32_be(ext_len[0], ext_len[1], ext_len[2], ext_len[3]) as usize;
+            offset += ext_len_len;
+            let ext_contents = ext_data[offset..offset+ext_len_int].to_vec();
+            offset += ext_len_int;
+            transport_params.ids.push(ext_type_int);
+            match QuicTransportParams::from_u32(ext_type_int) {
+                Some(t_type) => {
+                    match t_type {
+                        QuicTransportParams::IdleTimeout => transport_params.idle_timeout = ext_contents,
+                        QuicTransportParams::MaxUdpPayloadSize => transport_params.max_udp_payload_size = ext_contents,
+                        QuicTransportParams::InitialMaxData => transport_params.initial_max_data = ext_contents,
+                        QuicTransportParams::InitialMaxStreamDataBidiLocal => transport_params.initial_max_stream_data_bidi_local = ext_contents,
+                        QuicTransportParams::InitialMaxStreamDataBidiRemote => transport_params.initial_max_stream_data_bidi_remote = ext_contents,
+                        QuicTransportParams::InitialMaxStreamDataUni => transport_params.initial_max_stream_data_uni = ext_contents,
+                        QuicTransportParams::InitialMaxStreamsBidi => transport_params.initial_max_streams_bidi = ext_contents,
+                        QuicTransportParams::InitialMaxStreamsUni => transport_params.initial_max_streams_uni = ext_contents,
+                        QuicTransportParams::AckDelayExponent => transport_params.ack_delay_exponent = ext_contents,
+                        QuicTransportParams::MaxAckDelay => transport_params.max_ack_delay = ext_contents,
+                        QuicTransportParams::ActiveConnectionIDLimit => transport_params.active_connection_id_limit = ext_contents,
+                        _ => {},
+                        // QuicTransportParams::VersionInformation => todo!(),
+                        // QuicTransportParams::MaxDatagramFrameSize => todo!(),
+                        // QuicTransportParams::InitialRtt => todo!(),
+                        // QuicTransportParams::GoogleConnectionOptions => todo!(),
+                        // QuicTransportParams::GoogleVersion => todo!(),
+                        // QuicTransportParams::DatagramFlightSize => todo!(),
+                        // QuicTransportParams::NegotiatedVersion => todo!(),
+                    }
+                },
+                None => {},
+            };
+        }
+        transport_params.ids.sort();
+        Ok(transport_params)
     }
 
     pub fn sort_extensions(&mut self) {

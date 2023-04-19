@@ -281,10 +281,10 @@ impl QuicConn {
 
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
         let cipher_text_len = packet_len_int - tag_len - 1;
-        if cipher_text_len < 0 || offset < offset+cipher_text_len {
+        if cipher_text_len < 0 || offset > offset+cipher_text_len {
             return Err(QuicParseError::CryptoFail);
         }
-        if record.len() - 1 < offset + cipher_text_len + tag_len {
+        if record.len() < offset + cipher_text_len + tag_len {
             return Err(QuicParseError::ShortInitPacket);
         }
         let mut buf = record[offset..offset+cipher_text_len].to_vec();
@@ -392,12 +392,13 @@ impl QuicConn {
 impl fmt::Display for QuicConn {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "start: {:?} last: {:?} port: {:?} ipv4: {:?} \
-        version: {:X?} cid: {:X?} sid: {:X?} packet_num: {:X?} frames: {:X?} token_length: {:X?}",
+        version: {:X?} cid: {:X?} sid: {:X?} packet_num: {:X?} frames: {:X?} token_length: {:X?} tls_fp: {:?} quic_params_fp: {:?}",
                self.start_time, self.last_updated,
                self.server_port, self.is_ipv4,
                self.quic_version, self.client_cid,
                self.server_cid, self.initial_packet_number,
                self.frames, self.token_length,
+               self.tls_fp, self.tls_ch.as_ref().unwrap().quic_transport_fp_id,
         )
     }
 }

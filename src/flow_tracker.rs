@@ -142,8 +142,8 @@ impl FlowTracker {
                 Ok(res) => {
                     match res {
                         QuicParseResult::ParsedInit => {
-                            println!("QuicInit: {{ id: {} {}}}",
-                                conn.get_fp(), conn);
+                            // println!("QuicInit: {{ id: {} {}}}",
+                            //     conn.get_fp(), conn);
                             self.cache.add_quic_fingerprint(conn.get_fp() as i64, conn);
                         },
                         _ => {},
@@ -159,7 +159,8 @@ impl FlowTracker {
 
     pub fn flush_to_db(&mut self) {
         let quic_fcache = self.cache.flush_fingerprints();
-
+        let quic_mcache = self.cache.flush_quic_measurements();
+        let tls_mcache = self.cache.flush_tls_measurements();
         if self.dsn != None {
             let tcp_dsn = self.dsn.clone().unwrap();
             thread::spawn(move || {
@@ -214,6 +215,42 @@ impl FlowTracker {
                     }
                 };
 
+                let insert_tls_measurement = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO tls_measurements_norm_ext (
+                        unixtime,
+                        id,
+                        count
+                    )
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT ON CONSTRAINT tls_measurements_norm_ext_pkey DO UPDATE
+                    SET count = tls_measurements_norm_ext.count + $4;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_tls_measurement_norm_ext failed: {}", e);
+                        return;
+                    }
+                };
+
+                let insert_quic_measurement = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO quic_measurements (
+                        unixtime,
+                        id,
+                        count
+                    )
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT ON CONSTRAINT quic_measurements_pkey DO UPDATE
+                    SET count = quic_measurements.count + $4;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_quic_measurement failed: {}", e);
+                        return;
+                    }
+                };
+
                 for (quic_fp_id, quic_fp) in quic_fcache {
                     let tls_fp = quic_fp.tls_ch.unwrap();
                     // insert tls fp
@@ -241,6 +278,22 @@ impl FlowTracker {
                     ]);
                     if updated_rows.is_err() {
                         println!("Error updating quic_fingerprints: {:?}", updated_rows);
+                    }
+                }
+
+                for (k, count) in quic_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_quic_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating quic measurements: {:?}", updated_rows);
+                    }
+                }
+
+                for (k, count) in tls_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_tls_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating tls measurements: {:?}", updated_rows);
                     }
                 }
 
