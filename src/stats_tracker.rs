@@ -234,6 +234,7 @@ impl StatsTracker {
             QuicParseError::ShortZeroRttPacket => self.quic_short_zero_rtt += 1,
             QuicParseError::ShortHandshakePacket => self.quic_short_handshake += 1,
             QuicParseError::CryptoFail => self.quic_crypto_fail += 1,
+            _ => {}, // TODO: Remove this and stop being lazy 
         }
     }
 }

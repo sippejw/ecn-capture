@@ -1,7 +1,6 @@
 mod flow_tracker;
 mod common;
 mod cache;
-mod ecn_structs;
 mod quic;
 mod crypto;
 mod stats_tracker;
@@ -16,6 +15,8 @@ use pnet::datalink::{self, NetworkInterface};
 use pnet::datalink::Channel::Ethernet;
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use log::{info, warn, error};
+use pnet::packet::ip;
+use pnet::packet::ipv4::Ipv4Packet;
 use std::time::{Duration, Instant};
 use pcap::Capture;
 use flow_tracker::FlowTracker;

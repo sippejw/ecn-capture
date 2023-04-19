@@ -2,7 +2,6 @@ use std::net::{IpAddr};
 use std::hash::{Hash, Hasher};
 use std::time::{Instant};
 
-use pnet::packet::tcp::TcpPacket;
 use pnet::packet::udp::UdpPacket;
 
 #[derive(Copy, Clone)]
@@ -14,15 +13,6 @@ pub struct Flow {
 }
 
 impl Flow {
-    pub fn new_tcp(src_ip: &IpAddr, dst_ip: &IpAddr, tcp_pkt: &TcpPacket) -> Flow {
-        Flow {
-            src_ip: *src_ip,
-            dst_ip: *dst_ip,
-            src_port: tcp_pkt.get_source(),
-            dst_port: tcp_pkt.get_destination(),
-        }
-    }
-
     pub fn new_udp(src_ip: &IpAddr, dst_ip: &IpAddr, udp_pkt: &UdpPacket) -> Flow {
         Flow {
             src_ip: *src_ip,
