@@ -4,6 +4,7 @@ mod common;
 mod stats_tracker;
 mod quic;
 mod crypto;
+mod tls_parser;
 
 use libc::{size_t, c_char};
 use pnet::packet::{ethernet::{EthernetPacket, EtherTypes}, Packet};

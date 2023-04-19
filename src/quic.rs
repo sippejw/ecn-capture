@@ -1,10 +1,15 @@
-use crate::common::u8_to_u16_be;
-use crate::crypto::{derive_initial_key_material, self};
+use std::fmt;
+
+use crate::common::{u8_to_u32_be, hash_u32};
+use crate::{crypto, tls_parser};
 use byteorder::{BigEndian, ByteOrder};
+use ::crypto::digest::Digest;
+use ::crypto::sha1::Sha1;
 use enum_primitive::{self, enum_from_primitive};
 use num::FromPrimitive;
 use enum_primitive::enum_from_primitive_impl;
 use enum_primitive::enum_from_primitive_impl_ty;
+use tls_parser::{ClientHelloFingerprint};
 
 const SHORT_HEADER: u8 = 0b01;
 const LONG_HEADER: u8 = 0b11;
@@ -72,61 +77,7 @@ pub enum QuicParseError {
     CryptoFail,
     UnknownFrameType,
     UnhandledFrameType,
-}
-
-#[derive(Debug, Clone)]
-pub struct VersionNegotiationPacket {
-    dest_cid_len: usize,
-    dest_cid: Vec<u8>,
-    src_cid_len: usize,
-    src_cid: Vec<u8>,
-    supported_versions: Vec<Vec<u8>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct InitialPacket {
-    dest_cid_len: usize,
-    dest_cid: Vec<u8>,
-    src_cid_len: usize,
-    src_cid: Vec<u8>,
-    token_len: usize,
-    token: Vec<u8>,
-    packet_len: usize,
-    packet_num: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ZeroRttPacket {
-    dest_cid_len: usize,
-    dest_cid: Vec<u8>,
-    src_cid_len: usize,
-    src_cid: Vec<u8>,
-    token_len: usize,
-    token: Vec<u8>,
-    packet_len: usize,
-    packet_num: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HandshakePacket {
-    dest_cid_len: usize,
-    dest_cid: Vec<u8>,
-    src_cid_len: usize,
-    src_cid: Vec<u8>,
-    token_len: usize,
-    token: Vec<u8>,
-    packet_len: usize,
-    packet_num: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RetryPacket {
-    dest_cid_len: usize,
-    dest_cid: Vec<u8>,
-    src_cid_len: usize,
-    src_cid: Vec<u8>,
-    retry_token: Vec<u8>,
-    retry_integrity_tag: Vec<u8>,
+    FailedTLSFingerprinting,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -142,16 +93,16 @@ pub struct QuicConn {
     pub last_updated: i64,
     pub is_ipv4: u8,
     pub server_port: u16,
-    pub quic_version: u32,
-    pub version_negotiation_packets: Vec<VersionNegotiationPacket>,
-    pub initial_packets: Vec<InitialPacket>,
-    pub zero_rtt_packets: Vec<ZeroRttPacket>,
-    pub handshake_packets: Vec<HandshakePacket>,
-    pub retry_packets: Vec<RetryPacket>,
-    pub server_cids: Vec<Vec<u8>>,
-    pub client_cids: Vec<Vec<u8>>,
+    pub quic_version: Vec<u8>,
+    pub server_cid: Vec<u8>,
+    pub client_cid: Vec<u8>,
+    pub initial_packet_number: Vec<u8>,
+    pub frames: Vec<u8>,
+    pub token_length: u8,
     pub client_decrypt: Option<crypto::Open>,
     pub server_decrypt: Option<crypto::Open>,
+    pub tls_fp: i64,
+    pub tls_ch: Option<ClientHelloFingerprint>,
 }
 
 impl QuicConn {
@@ -162,17 +113,40 @@ impl QuicConn {
             last_updated: curr_time,
             server_port: server_port,
             is_ipv4: is_ipv4,
-            quic_version: 0,
-            version_negotiation_packets: Vec::new(),
-            initial_packets: Vec::new(),
-            zero_rtt_packets: Vec::new(),
-            handshake_packets: Vec::new(),
-            retry_packets: Vec::new(),
-            server_cids: Vec::new(),
-            client_cids: Vec::new(),
+            quic_version: Vec::new(),
+            server_cid: Vec::new(),
+            client_cid: Vec::new(),
+            initial_packet_number: Vec::new(),
+            frames: Vec::new(),
+            token_length: 0,
             client_decrypt: None,
             server_decrypt: None,
+            tls_fp: 0,
+            tls_ch: None,
         })
+    }
+
+    pub fn get_fp(&mut self) -> u64 {
+        let mut hasher = Sha1::new();
+
+        hash_u32(&mut hasher, self.quic_version.len() as u32);
+        hasher.input(&self.quic_version);
+
+        hash_u32(&mut hasher, self.server_cid.len() as u32);
+
+        hash_u32(&mut hasher, self.client_cid.len() as u32);
+
+        hash_u32(&mut hasher, self.initial_packet_number.len() as u32);
+        hasher.input(&self.initial_packet_number);
+
+        hash_u32(&mut hasher, self.frames.len() as u32);
+        hasher.input(&self.frames);
+
+        hash_u32(&mut hasher, self.token_length as u32);
+
+        let mut result = [0; 20];
+        hasher.result(&mut result);
+        BigEndian::read_u64(&result[0..8])
     }
 
     pub fn parse_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
@@ -181,7 +155,6 @@ impl QuicConn {
         self.last_updated = time::now().to_timespec().sec;
         let packet_form = record[0] >> 6 & 0b00000011;
         match packet_form {
-            SHORT_HEADER => return self.parse_short_header(record, is_client),
             LONG_HEADER => return self.parse_long_header(record, is_client),
             _ => return Err(QuicParseError::UnknownHeaderType)
         }
@@ -204,56 +177,12 @@ impl QuicConn {
             if is_client {
                 return Err(QuicParseError::ClientAttemptedVersionNegotiation)
             }
-            return self.parse_version_negotiation(&record[offset..]);
         }
+        self.quic_version = version.to_vec();
         match packet_type {
             INIT_PACKET => return self.parse_init(&record[offset..], protected_byte, version, is_client),
-            ZERO_RTT_PACKET => return self.parse_zero_rtt(&record[offset..], protected_byte),
-            HANDSHAKE_PACKET => return self.parse_handshake(&record[offset..], protected_byte),
-            RETRY_PACKET => return self.parse_retry(&record[offset..], is_client),
             _ => return Err(QuicParseError::UnknownPacketType)
         }
-    }
-
-    fn parse_version_negotiation(&mut self, record: &[u8]) -> Result<QuicParseResult, QuicParseError> {
-        let mut offset = 0;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortVersionNegotiationPacket);
-        }
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortVersionNegotiationPacket);
-        }
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortVersionNegotiationPacket);
-        }
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortVersionNegotiationPacket);
-        }
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        let mut supported_versions = Vec::new();
-        while offset < record.len() {
-            if record.len() - 1 < offset + 4 {
-                return Err(QuicParseError::InvalidVersionLength)
-            }
-            supported_versions.push(record[offset..offset+4].to_vec());
-            offset += 4;
-        }
-        let version_negotiation = VersionNegotiationPacket {
-            dest_cid_len: dest_cid_len,
-            dest_cid: dest_cid.to_vec(),
-            src_cid_len: src_cid_len,
-            src_cid: src_cid.to_vec(),
-            supported_versions: supported_versions,
-        };
-        self.version_negotiation_packets.push(version_negotiation);
-        return Ok(QuicParseResult::ParsedVersionNegotiation)
     } 
 
     fn parse_init(&mut self, record: &[u8], protected_header: u8, version: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
@@ -287,6 +216,7 @@ impl QuicConn {
             return Err(QuicParseError::ShortInitPacket);
         }
         let token = &record[offset..offset+token_len];
+        self.token_length = token_len as u8;
         offset += token_len;
         if record.len() - 1 < offset + 1 {
             return Err(QuicParseError::ShortInitPacket);
@@ -339,19 +269,9 @@ impl QuicConn {
             packet_number.push(protected_packet_number[i] ^ mask[i+1]);
         }
         let packet_number_int = BigEndian::read_i32(&packet_number);
+        self.initial_packet_number = packet_number;
         offset += packet_num_len;
 
-        let init = InitialPacket {
-            dest_cid_len: dest_cid_len,
-            dest_cid: dest_cid.to_vec(),
-            src_cid_len: src_cid_len,
-            src_cid: src_cid.to_vec(),
-            token_len: token_len,
-            token: token.to_vec(),
-            packet_len: packet_len_int,
-            packet_num: Vec::new(), //packet_num.to_vec(),
-        };
-        self.initial_packets.push(init);
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
         let cipher_text_len = packet_len_int - tag_len - 1;
         let mut buf = record[offset..offset+cipher_text_len].to_vec();
@@ -368,7 +288,7 @@ impl QuicConn {
         ad.append(&mut [token_len as u8].to_vec());
         ad.append(&mut token.to_vec());
         ad.append(&mut a_record_packet_len.to_vec());
-        ad.append(&mut packet_number[4-packet_num_len..].to_vec());
+        ad.append(&mut &mut self.initial_packet_number[4-packet_num_len..].to_vec());
 
         let decrypted_packet: Vec<u8>;
         if is_client {
@@ -382,7 +302,7 @@ impl QuicConn {
 
     fn handle_frames(&mut self, decrypted_record: &[u8]) -> Result<(), QuicParseError> {
         let mut offset = 0;
-        let mut frame_list: Vec<FrameType> = Vec::new();
+        let mut frame_list: Vec<u8> = Vec::new();
         let mut crypto_frames = Vec::new();
         while offset < decrypted_record.len() {
             let record_type = match FrameType::from_u8(decrypted_record[offset]) {
@@ -394,19 +314,15 @@ impl QuicConn {
                 FrameType::PADDING => {
                     match frame_list.last() {
                         Some(last_frame) => {
-                            if last_frame.clone() != FrameType::PADDING {
-                                frame_list.push(FrameType::PADDING);
+                            if last_frame.clone() != FrameType::PADDING as u8 {
+                                frame_list.push(FrameType::PADDING as u8);
                             }
                         },
-                        None => frame_list.push(FrameType::PADDING),
+                        None => frame_list.push(FrameType::PADDING as u8),
                     }
                 },
-                FrameType::PING => todo!(),
-                FrameType::ACK => todo!(),
-                FrameType::RESET_STREAM => todo!(),
-                FrameType::STOP_SENDING => todo!(),
                 FrameType::CRYPTO => {
-                    frame_list.push(FrameType::CRYPTO);
+                    frame_list.push(FrameType::CRYPTO as u8);
                     let crypto_offset_len = ((decrypted_record[offset] >> 6) + 1) as usize;
                     let mut crypto_offset = Vec::new();
                     for i in 0..4-crypto_offset_len {
@@ -440,208 +356,35 @@ impl QuicConn {
         for mut frame in crypto_frames {
             combined_crypto_frame.append(&mut frame.contents);
         }
+        self.frames = frame_list;
+        match ClientHelloFingerprint::from_try(&combined_crypto_frame) {
+            Ok(fp) => {
+                let fp_id = fp.get_fingerprint(false);
+                self.tls_fp = fp_id as i64;
+                self.tls_ch = Some(fp);
+            },
+            Err(_) => return Err(QuicParseError::FailedTLSFingerprinting),
+        }
         Ok(())
     }
 
     fn decrypt_init(&mut self, dest_cid: &[u8]) -> Result<(), QuicParseError> {
-        self.client_decrypt = Some(crypto::derive_initial_key_material(dest_cid, self.quic_version, false)?);
-        self.server_decrypt = Some(crypto::derive_initial_key_material(dest_cid, self.quic_version, true)?);
+        self.client_decrypt = Some(crypto::derive_initial_key_material(dest_cid, u8_to_u32_be(self.quic_version[0], self.quic_version[1], self.quic_version[2], self.quic_version[3]), false)?);
+        self.server_decrypt = Some(crypto::derive_initial_key_material(dest_cid, u8_to_u32_be(self.quic_version[0], self.quic_version[1], self.quic_version[2], self.quic_version[3]), true)?);
         Ok(())
     }
 
-    fn parse_zero_rtt(&mut self, record: &[u8], protected_header: u8) -> Result<QuicParseResult, QuicParseError> {
-        let mut offset = 0;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let token_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + token_len {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let token = &record[offset..offset+token_len];
-        offset += token_len;
-        if record.len() - 1 < offset + 1 {
-            return Err(QuicParseError::ShortZeroRttPacket);
-        }
-        let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
-        offset += 2;
-        // if record.len() - 1 < offset + packet_num_len {
-        //     return Err(QuicParseError::ShortZeroRttPacket);
-        // }
-        // let packet_num = &record[offset..offset+packet_num_len];
-        // offset += packet_num_len;
-        let zero_rtt = ZeroRttPacket {
-            dest_cid_len: dest_cid_len,
-            dest_cid: dest_cid.to_vec(),
-            src_cid_len: src_cid_len,
-            src_cid: src_cid.to_vec(),
-            token_len: token_len,
-            token: token.to_vec(),
-            packet_len: packet_len,
-            packet_num: Vec::new(), //packet_num.to_vec(),
-        };
-        self.zero_rtt_packets.push(zero_rtt);
-        Ok(QuicParseResult::ParsedZeroRTT)
-    }
+}
 
-    fn parse_handshake(&mut self, record: &[u8], protected_header: u8) -> Result<QuicParseResult, QuicParseError> {
-        let mut offset = 0;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let token_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + token_len {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let token = &record[offset..offset+token_len];
-        offset += token_len;
-        if record.len() - 1 < offset + 1 {
-            return Err(QuicParseError::ShortHandshakePacket);
-        }
-        let packet_len = u8_to_u16_be(record[offset], record[offset+1]) as usize;
-        offset += 2;
-        // if record.len() - 1 < offset + packet_num_len {
-        //     return Err(QuicParseError::ShortHandshakePacket);
-        // }
-        // let packet_num = &record[offset..offset+packet_num_len];
-        // offset += packet_num_len;
-        let handshake = HandshakePacket {
-            dest_cid_len: dest_cid_len,
-            dest_cid: dest_cid.to_vec(),
-            src_cid_len: src_cid_len,
-            src_cid: src_cid.to_vec(),
-            token_len: token_len,
-            token: token.to_vec(),
-            packet_len: packet_len,
-            packet_num: Vec::new(), //packet_num.to_vec(),
-        };
-        self.handshake_packets.push(handshake);
-        Ok(QuicParseResult::ParsedHandshake)
-    }
-
-    fn parse_retry(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
-        // Parse packet
-        let mut offset = 0;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortRetryPacket);
-        }
-        let dest_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortRetryPacket);
-        }
-        let dest_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortRetryPacket);
-        }
-        let src_cid_len = record[offset] as usize;
-        offset += 1;
-        if record.len() - 1 < offset + src_cid_len {
-            return Err(QuicParseError::ShortRetryPacket);
-        }
-        let src_cid = &record[offset..offset+src_cid_len];
-        offset += src_cid_len;
-        if offset > record.len()-16 {
-            return Err(QuicParseError::ShortRetryPacket);
-        }
-        let retry_token = &record[offset..record.len()-16];
-        offset = record.len()-16;
-        let retry_integrity_tag = &record[offset..];
-
-        // Set new server CID
-        if !is_client {
-            self.server_cids.push(src_cid.to_vec());
-        }
-
-        let retry = RetryPacket {
-            dest_cid_len: dest_cid_len,
-            dest_cid: dest_cid.to_vec(),
-            src_cid_len: src_cid_len,
-            src_cid: src_cid.to_vec(),
-            retry_token: retry_token.to_vec(),
-            retry_integrity_tag: retry_integrity_tag.to_vec(),
-        };
-        self.retry_packets.push(retry);
-        Ok(QuicParseResult::ParsedRetry)
-    }
-
-    fn parse_short_header(&mut self, record: &[u8], is_client: bool) -> Result<QuicParseResult, QuicParseError> {
-        let dest_cid_len;
-        if is_client {
-            if let Some(cid) = self.server_cids.last() {
-                dest_cid_len = cid.len();
-            } else {
-                dest_cid_len = 0;
-            }
-        } else {
-            if let Some(cid) = self.client_cids.last() {
-                dest_cid_len = cid.len();
-            } else {
-                dest_cid_len = 0;
-            }
-        }
-        let mut offset = 0;
-        if record.len() - 1 < offset {
-            return Err(QuicParseError::ShortShortHeader);
-        }
-        let _spin_bit = record[offset] >> 5 & 0b00000001;
-        let _reserved = record[offset] >> 3 & 0b00000011;
-        let _key_phase = record[offset] >> 2 & 0b00000001;
-        let packet_num_len = ((record[offset] & 0b00000011) as usize) + 1;
-        offset += 1;
-        if record.len() - 1 < offset + dest_cid_len {
-            return Err(QuicParseError::ShortShortHeader);
-        }
-        let _dst_cid = &record[offset..offset+dest_cid_len];
-        offset += dest_cid_len;
-        if record.len() - 1 < offset + packet_num_len {
-            return Err(QuicParseError::ShortShortHeader);
-        }
-        let _packet_number = &record[offset+packet_num_len];
-        offset += packet_num_len;
-        return Ok(QuicParseResult::ParsedShortHeader)
+impl fmt::Display for QuicConn {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "start: {:?} last: {:?} port: {:?} ipv4: {:?} \
+        version: {:X?} cid: {:X?} sid: {:X?} packet_num: {:X?} frames: {:X?} token_length: {:X?}",
+               self.start_time, self.last_updated,
+               self.server_port, self.is_ipv4,
+               self.quic_version, self.client_cid,
+               self.server_cid, self.initial_packet_number,
+               self.frames, self.token_length,
+        )
     }
 }

@@ -4,6 +4,7 @@ mod cache;
 mod quic;
 mod crypto;
 mod stats_tracker;
+mod tls_parser;
 
 extern crate env_logger;
 extern crate clap;
