@@ -284,7 +284,7 @@ impl QuicConn {
         if offset > (offset+cipher_text_len) {
             return Err(QuicParseError::CryptoFail);
         }
-        if record.len() < (offset + cipher_text_len + tag_len) {
+        if record.len() < (offset + cipher_text_len + tag_len) || record.len() < cipher_text_len || record.len() < tag_len {
             return Err(QuicParseError::ShortInitPacket);
         }
         let mut buf = record[offset..offset+cipher_text_len].to_vec();
