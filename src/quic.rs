@@ -226,6 +226,9 @@ impl QuicConn {
         for i in 0..4-packet_len_len {
             packet_len.push(0);
         }
+        if record.len() - 1 < offset + packet_len_len {
+            return Err(QuicParseError::ShortInitPacket);
+        }
         let mut record_packet_len = record[offset..offset+packet_len_len].to_vec();
         let a_record_packet_len = record[offset..offset+packet_len_len].to_vec();
         record_packet_len[0] = record_packet_len[0] & 0b00111111;
@@ -260,6 +263,9 @@ impl QuicConn {
             return Err(QuicParseError::CryptoFail);
         }
         let packet_num_len = ((unprotected_header & 0b00000011) + 1) as usize;
+        if record.len() - 1 < offset + packet_num_len {
+            return Err(QuicParseError::ShortInitPacket);
+        }
         let protected_packet_number = record[offset..offset+packet_num_len].to_vec();
         let mut packet_number: Vec<u8> = Vec::new();
         for i in 0..4-protected_packet_number.len() {
@@ -274,6 +280,9 @@ impl QuicConn {
 
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
         let cipher_text_len = packet_len_int - tag_len - 1;
+        if record.len() - 1 < offset + cipher_text_len + tag_len {
+            return Err(QuicParseError::ShortInitPacket);
+        }
         let mut buf = record[offset..offset+cipher_text_len].to_vec();
         offset += cipher_text_len;
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
