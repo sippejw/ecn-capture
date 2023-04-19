@@ -9,6 +9,7 @@ use enum_primitive::{self, enum_from_primitive};
 use num::FromPrimitive;
 use enum_primitive::enum_from_primitive_impl;
 use enum_primitive::enum_from_primitive_impl_ty;
+use pnet::packet::ip;
 use tls_parser::{ClientHelloFingerprint};
 
 const SHORT_HEADER: u8 = 0b01;
@@ -280,6 +281,9 @@ impl QuicConn {
 
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
         let cipher_text_len = packet_len_int - tag_len - 1;
+        if cipher_text_len < 0 {
+            return Err(QuicParseError::CryptoFail);
+        }
         if record.len() - 1 < offset + cipher_text_len + tag_len {
             return Err(QuicParseError::ShortInitPacket);
         }
