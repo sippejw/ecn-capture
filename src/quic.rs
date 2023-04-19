@@ -281,7 +281,7 @@ impl QuicConn {
 
         let tag_len = self.client_decrypt.as_ref().unwrap().alg().tag_len();
         let cipher_text_len = packet_len_int - tag_len - 1;
-        if cipher_text_len < 0 {
+        if cipher_text_len < 0 || offset < offset+cipher_text_len {
             return Err(QuicParseError::CryptoFail);
         }
         if record.len() - 1 < offset + cipher_text_len + tag_len {
