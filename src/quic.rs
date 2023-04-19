@@ -359,7 +359,7 @@ impl QuicConn {
         self.frames = frame_list;
         match ClientHelloFingerprint::from_try(&combined_crypto_frame) {
             Ok(fp) => {
-                let fp_id = fp.get_fingerprint(false);
+                let fp_id = fp.get_fingerprint(true);
                 self.tls_fp = fp_id as i64;
                 self.tls_ch = Some(fp);
             },
