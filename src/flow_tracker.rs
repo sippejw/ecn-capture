@@ -251,6 +251,22 @@ impl FlowTracker {
                     }
                 };
 
+                for (k, count) in quic_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_quic_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating quic measurements: {:?}", updated_rows);
+                    }
+                }
+
+                for (k, count) in tls_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_tls_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating tls measurements: {:?}", updated_rows);
+                    }
+                }
+
                 for (quic_fp_id, quic_fp) in quic_fcache {
                     let tls_fp = quic_fp.tls_ch.unwrap();
                     // insert tls fp
@@ -280,23 +296,6 @@ impl FlowTracker {
                         println!("Error updating quic_fingerprints: {:?}", updated_rows);
                     }
                 }
-
-                for (k, count) in quic_mcache {
-                    let updated_rows = thread_db_conn.execute(&insert_quic_measurement, &[&(k.1), &(k.0),
-                        &(count), &(count)]);
-                    if updated_rows.is_err() {
-                        println!("Error updating quic measurements: {:?}", updated_rows);
-                    }
-                }
-
-                for (k, count) in tls_mcache {
-                    let updated_rows = thread_db_conn.execute(&insert_tls_measurement, &[&(k.1), &(k.0),
-                        &(count), &(count)]);
-                    if updated_rows.is_err() {
-                        println!("Error updating tls measurements: {:?}", updated_rows);
-                    }
-                }
-
                 let inserter_thread_end = time::now();
                 info!("Updating TCP DB took {:?} ns in separate thread",
                          inserter_thread_end.sub(inserter_thread_start).num_nanoseconds());
