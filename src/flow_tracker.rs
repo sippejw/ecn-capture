@@ -20,7 +20,7 @@ use std::fs::OpenOptions;
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
 use crate::common::{TimedFlow, Flow};
-use crate::quic::{QuicConn, QuicParseResult};
+use crate::quic::{QuicConn, QuicParseResult, self};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -142,9 +142,19 @@ impl FlowTracker {
                 Ok(res) => {
                     match res {
                         QuicParseResult::ParsedInit => {
+                            let mut curr_time = time::now();
                             // println!("QuicInit: {{ id: {} {}}}",
                             //     conn.get_fp(), conn);
-                            self.cache.add_quic_fingerprint(conn.get_fp() as i64, conn);
+                            let quic_fp = conn.get_fp() as i64;
+                            let tls_fp = conn.tls_fp;
+                            self.cache.add_quic_fingerprint(quic_fp, conn);
+                            curr_time.tm_nsec = 0; // privacy
+                            curr_time.tm_sec = 0;
+                            curr_time.tm_min = 0;
+                            self.cache.add_quic_measurement(quic_fp, curr_time.to_timespec().sec as i32);
+                            if tls_fp != 0 {
+                                self.cache.add_tls_measurement(tls_fp, curr_time.to_timespec().sec as i32);
+                            }
                         },
                         _ => {},
                     }
