@@ -341,39 +341,40 @@ impl FlowTracker {
                 }
 
                 for (quic_fp_id, quic_fp) in quic_fcache {
-                    let tls_fp = quic_fp.tls_ch.unwrap();
-                    // insert tls fp
-                    let updated_rows = thread_db_conn.execute(&insert_tls_fingerprint_norm_ext, &[
-                        &(quic_fp.tls_fp as i64),
-                        &(tls_fp.ch_tls_version as i16),
-                        &tls_fp.cipher_suites, &tls_fp.compression_methods, &tls_fp.extensions_norm,
-                        &tls_fp.named_groups, &tls_fp.ec_point_fmt, &tls_fp.sig_algs, &tls_fp.alpn,
-                        &tls_fp.key_share, &tls_fp.psk_key_exchange_modes, &tls_fp.supported_versions,
-                        &tls_fp.cert_compression_algs, &tls_fp.record_size_limit,
-                    ]);
-                    if updated_rows.is_err() {
-                        println!("Error updating tls_fingerprints: {:?}", updated_rows);
-                    }
-
-                    let qtp_fp = tls_fp.quic_transport_fp.unwrap();
-                    // insert qtp fp
-                    let updated_rows = thread_db_conn.execute(&insert_qtp_fingerprint, &[
-                        &(tls_fp.quic_transport_fp_id as i64),
-                        &(qtp_fp.idle_timeout),
-                        &(qtp_fp.max_udp_payload_size),
-                        &(qtp_fp.initial_max_data),
-                        &(qtp_fp.initial_max_stream_data_bidi_local),
-                        &(qtp_fp.initial_max_stream_data_bidi_remote),
-                        &(qtp_fp.initial_max_stream_data_uni),
-                        &(qtp_fp.initial_max_streams_bidi),
-                        &(qtp_fp.initial_max_streams_uni),
-                        &(qtp_fp.ack_delay_exponent),
-                        &(qtp_fp.max_ack_delay),
-                        &(qtp_fp.active_connection_id_limit),
-                        &(qtp_fp.ids)
-                    ]);
-                    if updated_rows.is_err() {
-                        println!("Error updating qtp_fingerprints: {:?}", updated_rows);
+                    if let Some(tls_fp) = quic_fp.tls_ch {
+                        // insert tls fp
+                        let updated_rows = thread_db_conn.execute(&insert_tls_fingerprint_norm_ext, &[
+                            &(quic_fp.tls_fp as i64),
+                            &(tls_fp.ch_tls_version as i16),
+                            &tls_fp.cipher_suites, &tls_fp.compression_methods, &tls_fp.extensions_norm,
+                            &tls_fp.named_groups, &tls_fp.ec_point_fmt, &tls_fp.sig_algs, &tls_fp.alpn,
+                            &tls_fp.key_share, &tls_fp.psk_key_exchange_modes, &tls_fp.supported_versions,
+                            &tls_fp.cert_compression_algs, &tls_fp.record_size_limit,
+                        ]);
+                        if updated_rows.is_err() {
+                            println!("Error updating tls_fingerprints: {:?}", updated_rows);
+                        }
+                        if let Some(qtp_fp) = tls_fp.quic_transport_fp {
+                            // insert qtp fp
+                            let updated_rows = thread_db_conn.execute(&insert_qtp_fingerprint, &[
+                                &(tls_fp.quic_transport_fp_id as i64),
+                                &(qtp_fp.idle_timeout),
+                                &(qtp_fp.max_udp_payload_size),
+                                &(qtp_fp.initial_max_data),
+                                &(qtp_fp.initial_max_stream_data_bidi_local),
+                                &(qtp_fp.initial_max_stream_data_bidi_remote),
+                                &(qtp_fp.initial_max_stream_data_uni),
+                                &(qtp_fp.initial_max_streams_bidi),
+                                &(qtp_fp.initial_max_streams_uni),
+                                &(qtp_fp.ack_delay_exponent),
+                                &(qtp_fp.max_ack_delay),
+                                &(qtp_fp.active_connection_id_limit),
+                                &(qtp_fp.ids)
+                            ]);
+                            if updated_rows.is_err() {
+                                println!("Error updating qtp_fingerprints: {:?}", updated_rows);
+                            }
+                        }
                     }
 
                     //insert quic fp
