@@ -149,10 +149,14 @@ impl FlowTracker {
                             let quic_fp = conn.get_fp() as i64;
                             let tls_fp = conn.tls_fp;
                             let mut qtp_fp = 0;
+                            let mut super_fp = 0;
                             if tls_fp != 0 {
                                 qtp_fp = conn.tls_ch.as_ref().unwrap().quic_transport_fp_id;
                             }
                             self.cache.add_quic_fingerprint(quic_fp, conn);
+                            if quic_fp != 0 && tls_fp != 0 && qtp_fp != 0 {
+                                super_fp = self.cache.add_super_fingerprint(quic_fp, tls_fp, qtp_fp);
+                            }
                             curr_time.tm_nsec = 0; // privacy
                             curr_time.tm_sec = 0;
                             curr_time.tm_min = 0;
@@ -162,6 +166,9 @@ impl FlowTracker {
                             }
                             if qtp_fp != 0 {
                                 self.cache.add_qtp_measurement(qtp_fp, curr_time.to_timespec().sec as i32);
+                            }
+                            if super_fp != 0 {
+                                self.cache.add_super_measurement(super_fp, curr_time.to_timespec().sec as i32);
                             }
                         },
                         _ => {},
@@ -176,10 +183,12 @@ impl FlowTracker {
     }
 
     pub fn flush_to_db(&mut self) {
-        let quic_fcache = self.cache.flush_fingerprints();
+        let quic_fcache = self.cache.flush_quic_fingerprints();
+        let super_fcache = self.cache.flush_super_fingerprints();
         let quic_mcache = self.cache.flush_quic_measurements();
         let tls_mcache = self.cache.flush_tls_measurements();
         let qtp_mcache = self.cache.flush_qtp_measurements();
+        let super_mcache = self.cache.flush_super_measurements();
         if self.dsn != None {
             let tcp_dsn = self.dsn.clone().unwrap();
             thread::spawn(move || {
@@ -256,7 +265,25 @@ impl FlowTracker {
                 ) {
                     Ok(stmt) => stmt,
                     Err(e) => {
-                        println!("Preparing insert_fingerprint_norm_ext failed: {}", e);
+                        println!("Preparing insert_qtp_fingerprint failed: {}", e);
+                        return;
+                    }
+                };
+
+                let insert_super_fingerprint = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO super_fingerprints (
+                        id,
+                        quic_fp,
+                        tls_fp,
+                        qtp_fp
+                    )
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (id) DO NOTHING;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_super_fingerprint failed: {}", e);
                         return;
                     }
                 };
@@ -316,6 +343,25 @@ impl FlowTracker {
                 };
 
 
+                let insert_super_measurement = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO super_measurements (
+                        unixtime,
+                        id,
+                        count
+                    )
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT ON CONSTRAINT super_measurements_pkey DO UPDATE
+                    SET count = super_measurements.count + $4;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_super_measurement failed: {}", e);
+                        return;
+                    }
+                };
+
+
                 for (k, count) in quic_mcache {
                     let updated_rows = thread_db_conn.execute(&insert_quic_measurement, &[&(k.1), &(k.0),
                         &(count), &(count)]);
@@ -337,6 +383,14 @@ impl FlowTracker {
                         &(count), &(count)]);
                     if updated_rows.is_err() {
                         println!("Error updating qtp measurements: {:?}", updated_rows);
+                    }
+                }
+
+                for (k, count) in super_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_super_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating super measurements: {:?}", updated_rows);
                     }
                 }
 
@@ -391,6 +445,19 @@ impl FlowTracker {
                         println!("Error updating quic_fingerprints: {:?}", updated_rows);
                     }
                 }
+                
+                for (super_fp_id, (quic_fp, tls_fp, qtp_fp)) in super_fcache {
+                    let updated_rows = thread_db_conn.execute(&insert_super_fingerprint, &[
+                        &(super_fp_id),
+                        &(quic_fp),
+                        &(tls_fp),
+                        &(qtp_fp),
+                    ]);
+                    if updated_rows.is_err() {
+                        println!("Error updating super_fingerprints: {:?}", updated_rows);
+                    }
+                }
+                
                 let inserter_thread_end = time::now();
                 info!("Updating TCP DB took {:?} ns in separate thread",
                          inserter_thread_end.sub(inserter_thread_start).num_nanoseconds());
