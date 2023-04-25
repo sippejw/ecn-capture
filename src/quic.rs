@@ -361,6 +361,9 @@ impl QuicConn {
                     offset += length_int;
                     crypto_frames.push(CryptoFrame{offset: crypto_offset_int, length: length_int, contents: crypto_contents});
                 },
+                FrameType::PING => {
+                    frame_list.push(FrameType::PING as u8);
+                }
                 _ => return Err(QuicParseError::UnhandledFrameType),
             }
         }
