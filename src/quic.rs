@@ -9,7 +9,6 @@ use enum_primitive::{self, enum_from_primitive};
 use num::FromPrimitive;
 use enum_primitive::enum_from_primitive_impl;
 use enum_primitive::enum_from_primitive_impl_ty;
-use pnet::packet::ip;
 use tls_parser::{ClientHelloFingerprint};
 
 const SHORT_HEADER: u8 = 0b01;
@@ -79,6 +78,7 @@ pub enum QuicParseError {
     UnknownFrameType,
     UnhandledFrameType,
     FailedTLSFingerprinting,
+    VarLenError,
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -197,6 +197,7 @@ impl QuicConn {
             return Err(QuicParseError::ShortInitPacket);
         }
         let dest_cid = &record[offset..offset+dest_cid_len];
+        self.server_cid = dest_cid.to_vec();
         offset += dest_cid_len;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortInitPacket);
@@ -207,6 +208,7 @@ impl QuicConn {
             return Err(QuicParseError::ShortInitPacket);
         }
         let src_cid = &record[offset..offset+src_cid_len];
+        self.client_cid = src_cid.to_vec();
         offset += src_cid_len;
         if record.len() - 1 < offset {
             return Err(QuicParseError::ShortInitPacket);
@@ -224,7 +226,7 @@ impl QuicConn {
         }
         let packet_len_len = ((record[offset] >> 6) + 1) as usize;
         let mut packet_len = Vec::new();
-        for i in 0..4-packet_len_len {
+        for _ in 0..4-packet_len_len {
             packet_len.push(0);
         }
         if record.len() - 1 < offset + packet_len_len {
@@ -269,7 +271,7 @@ impl QuicConn {
         }
         let protected_packet_number = record[offset..offset+packet_num_len].to_vec();
         let mut packet_number: Vec<u8> = Vec::new();
-        for i in 0..4-protected_packet_number.len() {
+        for _ in 0..4-protected_packet_number.len() {
             packet_number.push(0);
         }
         for i in 0..protected_packet_number.len() {
@@ -335,25 +337,25 @@ impl QuicConn {
                 },
                 FrameType::CRYPTO => {
                     frame_list.push(FrameType::CRYPTO as u8);
-                    let crypto_offset_len = ((decrypted_record[offset] >> 6) + 1) as usize;
+                    let crypto_offset_len = get_var_len(decrypted_record[offset])?;
                     let mut crypto_offset = Vec::new();
-                    for i in 0..4-crypto_offset_len {
+                    for _ in 0..8-crypto_offset_len {
                         crypto_offset.push(0);
                     }
                     let mut crypto_offset_record = decrypted_record[offset..offset+crypto_offset_len].to_vec();
                     crypto_offset_record[0] = crypto_offset_record[0] & 0b00111111;
                     crypto_offset.append(&mut crypto_offset_record);
                     offset += crypto_offset_len;
-                    let crypto_offset_int = BigEndian::read_i32(&crypto_offset) as usize;
-                    let length_len = ((decrypted_record[offset] >> 6) + 1) as usize;
+                    let crypto_offset_int = BigEndian::read_i64(&crypto_offset) as usize;
+                    let length_len = get_var_len(decrypted_record[offset])?;
                     let mut length = Vec::new();
-                    for i in 0..4-length_len {
+                    for _ in 0..8-length_len {
                         length.push(0);
                     }
                     let mut length_record = decrypted_record[offset..offset+length_len].to_vec();
                     length_record[0] = length_record[0] & 0b00111111;
                     length.append(&mut length_record);
-                    let length_int = BigEndian::read_i32(&length) as usize;
+                    let length_int = BigEndian::read_i64(&length) as usize;
                     offset += length_len;
                     let crypto_contents = decrypted_record[offset..offset+length_int].to_vec();
                     offset += length_int;
@@ -388,16 +390,29 @@ impl QuicConn {
 
 }
 
+pub fn get_var_len(a: u8) -> Result<usize, QuicParseError> {
+    let two_msb = a >> 6;
+    match two_msb {
+        0b00 => return Ok(1),
+        0b01 => return Ok(2),
+        0b10 => return Ok(4),
+        0b11 => return Ok(8),
+        _ => Err(QuicParseError::VarLenError)
+    }
+}
+
 impl fmt::Display for QuicConn {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "start: {:?} last: {:?} port: {:?} ipv4: {:?} \
-        version: {:X?} cid: {:X?} sid: {:X?} packet_num: {:X?} frames: {:X?} token_length: {:X?} tls_fp: {:?} quic_params_fp: {:?}",
+        version: {:X?} cid: {:X?} sid: {:X?} packet_num: {:X?} frames: {:X?} token_length: {:X?} tls_fp: {:?} quic_params_fp: {:?} \
+        \n{:?} \n{:?}",
                self.start_time, self.last_updated,
                self.server_port, self.is_ipv4,
                self.quic_version, self.client_cid,
                self.server_cid, self.initial_packet_number,
                self.frames, self.token_length,
                self.tls_fp, self.tls_ch.as_ref().unwrap().quic_transport_fp_id,
+               self.tls_ch.as_ref().unwrap(),  self.tls_ch.as_ref().unwrap().quic_transport_fp.as_ref().unwrap(),
         )
     }
 }

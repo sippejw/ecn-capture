@@ -4,7 +4,8 @@ extern crate crypto;
 extern crate byteorder;
 
 use std::fmt::{self, Debug};
-use crate::common;
+use crate::common::{self, hash_u64};
+use crate::quic::{get_var_len, QuicParseError};
 
 use self::num::FromPrimitive;
 use self::hex_slice::AsHex;
@@ -20,11 +21,7 @@ use common::{u8_to_u16_be, u8_to_u32_be, vec_u8_to_vec_u16_be, vec_u16_to_vec_u8
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HelloParseError {
     ShortBuffer,
-    NotAHandshake,
-    UnknownRecordTLSVersion,
-    ShortOuterRecord,
     NotAClientHello,
-    InnerOuterRecordLenContradict,
     UnknownChTLSVersion,
     SessionIDLenExceedBuf,
     CiphersuiteLenMisparse,
@@ -33,17 +30,13 @@ pub enum HelloParseError {
     ShortExtensionHeader,
     ExtensionLenExceedBuf,
 
-    NotAServerHello,
-
     KeyShareExtShort,
     KeyShareExtLong,
     KeyShareExtLenMisparse,
     PskKeyExchangeModesExtShort,
     PskKeyExchangeModesExtLenMisparse,
-    SupportedVersionsExtShort,
     SupportedVersionsExtLenMisparse,
-
-    UnknownQuicTransportParameter,
+    QuicTransportParameterFailure,
 }
 
 enum_from_primitive! {
@@ -164,7 +157,7 @@ pub struct QuicTransportFingerprint {
     pub ack_delay_exponent: Vec<u8>,
     pub max_ack_delay: Vec<u8>,
     pub active_connection_id_limit: Vec<u8>,
-    pub ids: Vec<u32>,
+    pub ids: Vec<i64>,
 }
 
 impl QuicTransportFingerprint {
@@ -205,7 +198,7 @@ impl QuicTransportFingerprint {
 
         hash_u32(&mut hasher, self.ids.len() as u32);
         for id in &self.ids {
-            hash_u32(&mut hasher, *id);
+            hash_u64(&mut hasher, *id as u64);
         }
         let mut result = [0; 20];
         hasher.result(&mut result);
@@ -236,7 +229,7 @@ pub struct ClientHelloFingerprint {
     pub cert_compression_algs: Vec<u8>,
     pub record_size_limit : Vec<u8>,
     pub quic_transport_fp: Option<QuicTransportFingerprint>,
-    pub quic_transport_fp_id: u64,
+    pub quic_transport_fp_id: i64,
 }
 
 pub type ClientHelloParseResult = Result<ClientHelloFingerprint, HelloParseError>;
@@ -253,7 +246,7 @@ impl ClientHelloFingerprint {
         }
         offset += 1;
 
-        let ch_length = u8_to_u32_be(0, a[offset], a[offset+1], a[offset+2]);
+        let _ch_length = u8_to_u32_be(0, a[offset], a[offset+1], a[offset+2]);
         offset += 3;
 
         let ch_tls_version = match TlsVersion::from_u16(u8_to_u16_be(a[offset], a[offset+1])) {
@@ -410,8 +403,11 @@ impl ClientHelloFingerprint {
                 self.record_size_limit = ext_data.to_vec();
             },
             Some(TlsExtension::QuicTransportParameters) => {
-                // self.quic_transport_fp = Some(self.handle_quic_transport_parameters(ext_data)?);
-                // self.quic_transport_fp_id = self.quic_transport_fp.as_ref().unwrap().get_fingerprint();
+                match self.handle_quic_transport_parameters(ext_data) {
+                    Ok(fp) => self.quic_transport_fp = Some(fp),
+                    Err(_) => return Err(HelloParseError::QuicTransportParameterFailure),
+                }
+                self.quic_transport_fp_id = self.quic_transport_fp.as_ref().unwrap().get_fingerprint() as i64;
             }
             _ => {}
         };
@@ -420,7 +416,7 @@ impl ClientHelloFingerprint {
         Ok(())
     }
 
-    pub fn handle_quic_transport_parameters(&mut self, ext_data: &[u8]) -> Result<QuicTransportFingerprint, HelloParseError> {
+    pub fn handle_quic_transport_parameters(&mut self, ext_data: &[u8]) -> Result<QuicTransportFingerprint, QuicParseError> {
         let mut offset = 0;
         let mut transport_params = QuicTransportFingerprint{
             idle_timeout: Vec::with_capacity(0), 
@@ -437,33 +433,37 @@ impl ClientHelloFingerprint {
             ids: Vec::with_capacity(0),
         };
         while offset < ext_data.len() {
-            let ext_type_len = ((ext_data[offset] >> 6) + 1) as usize;
+            let ext_type_len = get_var_len(ext_data[offset])?;
             let mut ext_type: Vec<u8> = Vec::new();
-            for i in 0..4-ext_type_len {
+            for _ in 0..8-ext_type_len {
                 ext_type.push(0);
             }
             for i in 0..ext_type_len {
                 ext_type.push(ext_data[offset+i]);
             }
-            ext_type[4-ext_type_len] &= 0b00111111;
-            let ext_type_int = u8_to_u32_be(ext_type[0], ext_type[1], ext_type[2], ext_type[3]);
+            ext_type[8-ext_type_len] &= 0b00111111;
+            let mut ext_type_int = BigEndian::read_u64(&ext_type);
             offset += ext_type_len;
 
-            let ext_len_len = ((ext_data[offset] >> 6) + 1) as usize;
+            let ext_len_len = get_var_len(ext_data[offset])?;
             let mut ext_len: Vec<u8> = Vec::new();
-            for i in 0..4-ext_len_len {
+            for _ in 0..8-ext_len_len {
                 ext_len.push(0);
             }
             for i in 0..ext_len_len {
                 ext_len.push(ext_data[offset+i]);
             }
-            ext_len[4-ext_len_len] &= 0b00111111;
-            let ext_len_int = u8_to_u32_be(ext_len[0], ext_len[1], ext_len[2], ext_len[3]) as usize;
+            ext_len[8-ext_len_len] &= 0b00111111;
+            let ext_len_int = BigEndian::read_u64(&ext_len);
             offset += ext_len_len;
-            let ext_contents = ext_data[offset..offset+ext_len_int].to_vec();
-            offset += ext_len_int;
-            transport_params.ids.push(ext_type_int);
-            match QuicTransportParams::from_u32(ext_type_int) {
+            let ext_contents = ext_data[offset..offset+ext_len_int as usize].to_vec();
+            offset += ext_len_int as usize;
+            // Degrease ext type
+            if is_trans_param_grease(ext_type_int) {
+                ext_type_int = 27;
+            }
+            transport_params.ids.push(ext_type_int as i64);
+            match QuicTransportParams::from_u64(ext_type_int) {
                 Some(t_type) => {
                     match t_type {
                         QuicTransportParams::IdleTimeout => transport_params.idle_timeout = ext_contents,
@@ -507,7 +507,7 @@ impl ClientHelloFingerprint {
         // We'll use SHA1 instead...
 
         let mut hasher = Sha1::new();
-        let version = (self.ch_tls_version as u32);
+        let version = self.ch_tls_version as u32;
         hash_u32(&mut hasher, version);
 
 
@@ -573,6 +573,13 @@ impl fmt::Display for ClientHelloFingerprint {
                String::from_utf8_lossy(self.sni.clone().as_slice()),
         )
     }
+}
+
+fn is_trans_param_grease(param: u64) -> bool {
+    if param >= 27 {
+        return (param-27) % 31 == 0 
+    }
+    return false
 }
 
 // Coverts array of [u8] into Vec<u8>, and performs ungrease.

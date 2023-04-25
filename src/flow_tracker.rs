@@ -2,7 +2,7 @@ extern crate time;
 extern crate postgres;
 
 use std::ops::Sub;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use std::collections::{HashSet, VecDeque};
 use pnet::packet::ethernet::{EthernetPacket, EtherTypes};
 use pnet::packet::ipv6::Ipv6Packet;
@@ -20,7 +20,7 @@ use std::fs::OpenOptions;
 use crate::cache::{MeasurementCache, MEASUREMENT_CACHE_FLUSH};
 use crate::stats_tracker::{StatsTracker};
 use crate::common::{TimedFlow, Flow};
-use crate::quic::{QuicConn, QuicParseResult, self};
+use crate::quic::{QuicConn, QuicParseResult};
 
 pub struct FlowTracker {
     flow_timeout: Duration,
@@ -126,14 +126,13 @@ impl FlowTracker {
 
     pub fn handle_quic_record(&mut self, is_client: bool, source: IpAddr, _destination: IpAddr, record: &[u8], flow: &Flow) {
         let mut measure_conn = true;
-        match self.cache.flows.get(flow) {
-            Some(last_update) => {
-                if time::now().to_timespec().sec - last_update < self.flow_timeout.as_secs() as i64 {
-                    measure_conn = false;
-                }
-                self.cache.add_flow(flow);
-            },
-            None => self.cache.add_flow(flow),
+        if is_client {
+            if let Some(_last_update) = self.cache.flows.get(flow) {
+                measure_conn = false;
+            }
+            self.cache.add_flow(flow);
+        } else {
+            measure_conn = false;
         }
         if measure_conn {
             let mut conn = QuicConn::new_conn(source.is_ipv4() as u8, 443).unwrap();
@@ -143,10 +142,16 @@ impl FlowTracker {
                     match res {
                         QuicParseResult::ParsedInit => {
                             let mut curr_time = time::now();
-                            // println!("QuicInit: {{ id: {} {}}}",
-                            //     conn.get_fp(), conn);
+                            // if true {
+                            //     println!("QuicInit: {{ id: {} {}}}",
+                            //         conn.get_fp(), conn);
+                            // }
                             let quic_fp = conn.get_fp() as i64;
                             let tls_fp = conn.tls_fp;
+                            let mut qtp_fp = 0;
+                            if tls_fp != 0 {
+                                qtp_fp = conn.tls_ch.as_ref().unwrap().quic_transport_fp_id;
+                            }
                             self.cache.add_quic_fingerprint(quic_fp, conn);
                             curr_time.tm_nsec = 0; // privacy
                             curr_time.tm_sec = 0;
@@ -154,6 +159,9 @@ impl FlowTracker {
                             self.cache.add_quic_measurement(quic_fp, curr_time.to_timespec().sec as i32);
                             if tls_fp != 0 {
                                 self.cache.add_tls_measurement(tls_fp, curr_time.to_timespec().sec as i32);
+                            }
+                            if qtp_fp != 0 {
+                                self.cache.add_qtp_measurement(qtp_fp, curr_time.to_timespec().sec as i32);
                             }
                         },
                         _ => {},
@@ -171,6 +179,7 @@ impl FlowTracker {
         let quic_fcache = self.cache.flush_fingerprints();
         let quic_mcache = self.cache.flush_quic_measurements();
         let tls_mcache = self.cache.flush_tls_measurements();
+        let qtp_mcache = self.cache.flush_qtp_measurements();
         if self.dsn != None {
             let tcp_dsn = self.dsn.clone().unwrap();
             thread::spawn(move || {
@@ -225,6 +234,34 @@ impl FlowTracker {
                     }
                 };
 
+                let insert_qtp_fingerprint = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO qtp_fingerprints (
+                        id,
+                        quic_transport_fp_id,
+                        idle_timeout,
+                        max_udp_payload_size,
+                        initial_max_data,
+                        initial_max_stream_data_bidi_local,
+                        initial_max_stream_data_bidi_remote,
+                        initial_max_stream_data_uni,
+                        initial_max_streams_bidi,
+                        initial_max_streams_uni,
+                        ack_delay_exponent,
+                        max_ack_delay,
+                        active_connection_id_limit,
+                        param_ids
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    ON CONFLICT (id) DO NOTHING;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_fingerprint_norm_ext failed: {}", e);
+                        return;
+                    }
+                };
+
                 let insert_tls_measurement = match thread_db_conn.prepare(
                     "INSERT
                     INTO tls_measurements_norm_ext (
@@ -261,6 +298,25 @@ impl FlowTracker {
                     }
                 };
 
+                let insert_qtp_measurement = match thread_db_conn.prepare(
+                    "INSERT
+                    INTO qtp_measurements (
+                        unixtime,
+                        id,
+                        count
+                    )
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT ON CONSTRAINT qtp_measurements_pkey DO UPDATE
+                    SET count = qtp_measurements.count + $4;"
+                ) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        println!("Preparing insert_qtp_measurement failed: {}", e);
+                        return;
+                    }
+                };
+
+
                 for (k, count) in quic_mcache {
                     let updated_rows = thread_db_conn.execute(&insert_quic_measurement, &[&(k.1), &(k.0),
                         &(count), &(count)]);
@@ -277,10 +333,18 @@ impl FlowTracker {
                     }
                 }
 
+                for (k, count) in qtp_mcache {
+                    let updated_rows = thread_db_conn.execute(&insert_qtp_measurement, &[&(k.1), &(k.0),
+                        &(count), &(count)]);
+                    if updated_rows.is_err() {
+                        println!("Error updating qtp measurements: {:?}", updated_rows);
+                    }
+                }
+
                 for (quic_fp_id, quic_fp) in quic_fcache {
                     let tls_fp = quic_fp.tls_ch.unwrap();
                     // insert tls fp
-                    let mut updated_rows = thread_db_conn.execute(&insert_tls_fingerprint_norm_ext, &[
+                    let updated_rows = thread_db_conn.execute(&insert_tls_fingerprint_norm_ext, &[
                         &(quic_fp.tls_fp as i64),
                         &(tls_fp.ch_tls_version as i16),
                         &tls_fp.cipher_suites, &tls_fp.compression_methods, &tls_fp.extensions_norm,
@@ -292,8 +356,29 @@ impl FlowTracker {
                         println!("Error updating tls_fingerprints: {:?}", updated_rows);
                     }
 
+                    let qtp_fp = tls_fp.quic_transport_fp.unwrap();
+                    // insert qtp fp
+                    let updated_rows = thread_db_conn.execute(&insert_qtp_fingerprint, &[
+                        &(tls_fp.quic_transport_fp_id as i64),
+                        &(qtp_fp.idle_timeout),
+                        &(qtp_fp.max_udp_payload_size),
+                        &(qtp_fp.initial_max_data),
+                        &(qtp_fp.initial_max_stream_data_bidi_local),
+                        &(qtp_fp.initial_max_stream_data_bidi_remote),
+                        &(qtp_fp.initial_max_stream_data_uni),
+                        &(qtp_fp.initial_max_streams_bidi),
+                        &(qtp_fp.initial_max_streams_uni),
+                        &(qtp_fp.ack_delay_exponent),
+                        &(qtp_fp.max_ack_delay),
+                        &(qtp_fp.active_connection_id_limit),
+                        &(qtp_fp.ids)
+                    ]);
+                    if updated_rows.is_err() {
+                        println!("Error updating qtp_fingerprints: {:?}", updated_rows);
+                    }
+
                     //insert quic fp
-                    let mut updated_rows = thread_db_conn.execute(&insert_quic_fingerprint, &[
+                    let updated_rows = thread_db_conn.execute(&insert_quic_fingerprint, &[
                         &(quic_fp_id as i64),
                         &quic_fp.quic_version,
                         &(quic_fp.client_cid.len() as i16),
@@ -311,14 +396,6 @@ impl FlowTracker {
                          inserter_thread_end.sub(inserter_thread_start).num_nanoseconds());
             });
         }
-    }
-
-    fn begin_tracking_quic_conn(&mut self, flow: &Flow) {
-        self.stale_quic_drops.push_back(TimedFlow {
-            event_time: Instant::now(),
-            flow: *flow,
-        });
-        self.tracked_quic_conns.insert(*flow);
     }
 
     pub fn cleanup(&mut self) {

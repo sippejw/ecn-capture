@@ -1,6 +1,6 @@
 pub const MEASUREMENT_CACHE_FLUSH: i64 = 60; // every min
-pub const TCP_CONNECTION_TIMEOUT: i64 = 60;
-pub const UDP_CONNECTION_TIMEOUT: i64 = 60;
+// pub const TCP_CONNECTION_TIMEOUT: i64 = 60;
+// pub const UDP_CONNECTION_TIMEOUT: i64 = 60;
 
 use std::{collections::{HashMap, HashSet}, mem};
 
@@ -13,6 +13,7 @@ pub struct MeasurementCache {
     quic_fps_flushed: HashSet<i64>,
     pub quic_measurements: HashMap<(i64, i32), i32>,
     pub tls_measurements: HashMap<(i64, i32), i32>,
+    pub qtp_measurements: HashMap<(i64, i32), i32>,
 }
 
 impl MeasurementCache {
@@ -24,6 +25,7 @@ impl MeasurementCache {
             quic_fps_flushed: HashSet::new(),
             quic_measurements: HashMap::new(),
             tls_measurements: HashMap::new(),
+            qtp_measurements: HashMap::new(),
         }
     }
 
@@ -57,6 +59,12 @@ impl MeasurementCache {
         *counter += 1;
     }
 
+    pub fn add_qtp_measurement(&mut self, fp: i64, ts: i32) {
+        let key = (fp, ts);
+        let counter = self.qtp_measurements.entry(key).or_insert(0);
+        *counter += 1;
+    }
+
     pub fn flush_fingerprints(&mut self) -> HashMap<i64, QuicConn> {
         self.last_flush = time::now();
         for (fp_id, _) in self.quic_fps_new.iter() {
@@ -74,5 +82,10 @@ impl MeasurementCache {
     pub fn flush_tls_measurements(&mut self) -> HashMap<(i64, i32), i32> {
         self.last_flush = time::now();
         mem::replace(&mut self.tls_measurements, HashMap::new())
+    }
+
+    pub fn flush_qtp_measurements(&mut self) -> HashMap<(i64, i32), i32> {
+        self.last_flush = time::now();
+        mem::replace(&mut self.qtp_measurements, HashMap::new())
     }
 }

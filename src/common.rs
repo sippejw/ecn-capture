@@ -21,14 +21,6 @@ impl Flow {
             dst_port: udp_pkt.get_destination(),
         }
     }
-
-    pub fn reversed_clone(&self) -> Flow {
-        Flow{src_ip: self.dst_ip,
-            src_port: self.dst_port,
-            dst_ip: self.src_ip,
-            dst_port: self.src_port,
-        }
-    }
 }
 
 impl PartialEq for Flow {
@@ -64,6 +56,17 @@ pub fn u8_to_u32_be(first_byte: u8, second_byte: u8, third_byte: u8, fourth_byte
 
 pub fn hash_u32<D: Digest>(h: &mut D, n: u32) {
     h.input(&[((n >> 24) & 0xff) as u8,
+        ((n >> 16) & 0xff) as u8,
+        ((n >> 8) & 0xff) as u8,
+        (n & 0xff) as u8]);
+}
+
+pub fn hash_u64<D: Digest>(h: &mut D, n: u64) {
+    h.input(&[((n >> 56) & 0xff) as u8,
+        ((n >> 48) & 0xff) as u8,
+        ((n >> 40) & 0xff) as u8,
+        ((n >> 32) & 0xff) as u8,
+        ((n >> 24) & 0xff) as u8,
         ((n >> 16) & 0xff) as u8,
         ((n >> 8) & 0xff) as u8,
         (n & 0xff) as u8]);
