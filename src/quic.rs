@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::common::{u8_to_u32_be, hash_u32};
@@ -316,7 +317,7 @@ impl QuicConn {
 
     fn handle_frames(&mut self, decrypted_record: &[u8]) -> Result<(), QuicParseError> {
         let mut offset = 0;
-        let mut frame_list: Vec<u8> = Vec::new();
+        let mut frame_list: HashSet<u8> = HashSet::new();
         let mut crypto_frames = Vec::new();
         while offset < decrypted_record.len() {
             let record_type = match FrameType::from_u8(decrypted_record[offset]) {
@@ -326,17 +327,10 @@ impl QuicConn {
             offset += 1;
             match record_type {
                 FrameType::PADDING => {
-                    match frame_list.last() {
-                        Some(last_frame) => {
-                            if last_frame.clone() != FrameType::PADDING as u8 {
-                                frame_list.push(FrameType::PADDING as u8);
-                            }
-                        },
-                        None => frame_list.push(FrameType::PADDING as u8),
-                    }
+                    frame_list.insert(FrameType::PADDING as u8);
                 },
                 FrameType::CRYPTO => {
-                    frame_list.push(FrameType::CRYPTO as u8);
+                    frame_list.insert(FrameType::CRYPTO as u8);
                     let crypto_offset_len = get_var_len(decrypted_record[offset])?;
                     let mut crypto_offset = Vec::new();
                     for _ in 0..8-crypto_offset_len {
@@ -362,7 +356,7 @@ impl QuicConn {
                     crypto_frames.push(CryptoFrame{offset: crypto_offset_int, length: length_int, contents: crypto_contents});
                 },
                 FrameType::PING => {
-                    frame_list.push(FrameType::PING as u8);
+                    frame_list.insert(FrameType::PING as u8);
                 }
                 _ => return Err(QuicParseError::UnhandledFrameType),
             }
@@ -373,7 +367,8 @@ impl QuicConn {
         for mut frame in crypto_frames {
             combined_crypto_frame.append(&mut frame.contents);
         }
-        self.frames = frame_list;
+        self.frames = frame_list.into_iter().collect();
+        self.frames.sort();
         match ClientHelloFingerprint::from_try(&combined_crypto_frame) {
             Ok(fp) => {
                 let fp_id = fp.get_fingerprint(true);
